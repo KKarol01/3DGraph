@@ -5,6 +5,7 @@
 
 namespace g3d {
 
+    Window::Window() { memset(title, 0, 64); }
     Window::Window(const char* title, uint32_t width, uint32_t height) {
         this->width = width;
         this->height = height;

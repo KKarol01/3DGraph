@@ -15,7 +15,7 @@
 #include <renderer.hpp>
 
 struct AppState {
-    g3d::Window window{"3DGraph", 1920, 1080};
+    g3d::Window window;
 } app_state;
 
 // OrbitalCamera *orb_cam;
@@ -24,7 +24,7 @@ struct AppState {
 
 // template <typename T, typename DRAW_CB> static void display_2col_list(std::vector<T> &data, DRAW_CB draw_callback);
 
-static void start_application();
+static void start_application(const char* window_title, uint32_t window_width, uint32_t window_height);
 static void terminate_application();
 
 // static void save_project(const char *file_name);
@@ -56,7 +56,101 @@ static void terminate_application();
 // std::vector<Constant> constants;
 
 int main() {
-    start_application();
+    start_application("3DCalc", 1280, 960);
+
+    g3d::HandleFramebuffer framebuffer_main;
+    g3d::HandleTexture texture_fmain_color;
+    g3d::HandleTexture texture_fmain_depth_stencil;
+
+    g3d::HandleProgram program_plane;
+    g3d::HandleProgram program_line;
+    g3d::HandleShader shader_plane_vert;
+    g3d::HandleShader shader_plane_frag;
+    g3d::HandleShader shader_line_vert;
+    g3d::HandleShader shader_line_frag;
+
+    g3d::HandleVao vao_plane;
+    g3d::HandleVao vao_line;
+    g3d::HandleBuffer vbo_plane, ebo_plane;
+    g3d::HandleBuffer vbo_line;
+
+    glCreateFramebuffers(1, &framebuffer_main);
+    glCreateTextures(GL_TEXTURE_2D, 1, &texture_fmain_color);
+    glCreateTextures(GL_TEXTURE_2D, 1, &texture_fmain_depth_stencil);
+    glTextureStorage2D(texture_fmain_color, 1, GL_RGB8, app_state.window.width, app_state.window.height);
+    glTextureStorage2D(texture_fmain_depth_stencil, 1, GL_DEPTH24_STENCIL8, app_state.window.width, app_state.window.height);
+    glNamedFramebufferTexture(framebuffer_main, GL_COLOR_ATTACHMENT0, texture_fmain_color, 0);
+    glNamedFramebufferTexture(framebuffer_main, GL_DEPTH_STENCIL_ATTACHMENT, texture_fmain_depth_stencil, 0);
+    assert((glCheckNamedFramebufferStatus(framebuffer_main, GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) && "Main framebuffer initialisation error.");
+
+    program_plane = glCreateProgram();
+    shader_plane_vert = glCreateShader(GL_VERTEX_SHADER);
+    shader_plane_frag = glCreateShader(GL_FRAGMENT_SHADER);
+
+    const char* shader_plane_vert_src = R"glsl(
+        #version 460 core
+        layout(location=0) in vec2 position;
+
+        void main() {gl_Position = vec4(position, 0.0, 1.0); }
+    )glsl";
+
+    const char* shader_plane_frag_src = R"glsl(
+        #version 460 core
+        out vec4 FRAG_COLOR;
+
+        void main() { FRAG_COLOR = vec4(0.3, 1.0.xxx); }
+    )glsl";
+
+    glShaderSource(shader_plane_vert, 1, &shader_plane_vert_src, 0);
+    glShaderSource(shader_plane_frag, 1, &shader_plane_frag_src, 0);
+    glCompileShader(shader_plane_vert);
+    glCompileShader(shader_plane_frag);
+    glAttachShader(program_plane, shader_plane_vert);
+    glAttachShader(program_plane, shader_plane_frag);
+    glLinkProgram(program_plane);
+    {
+        int link_status = 0;
+        glGetProgramiv(program_plane, GL_LINK_STATUS, &link_status);
+        assert((link_status == GL_TRUE) && "Plane shader program could not be linked properly."); 
+    }
+
+    glCreateVertexArrays(1, &vao_plane);
+    glCreateBuffers(1, &vbo_plane);
+    glCreateBuffers(1, &ebo_plane);
+    glVertexArrayVertexBuffer(vao_plane, 0, vbo_plane, 0, 8);
+    glVertexArrayElementBuffer(vao_plane, ebo_plane);
+    glEnableVertexArrayAttrib(vao_plane, 0);
+    glVertexArrayAttribBinding(vao_plane, 0, 0);
+    glVertexArrayAttribFormat(vao_plane, 0, 2, GL_FLOAT, GL_FALSE, 0);
+
+    glCreateVertexArrays(1, &vao_line);
+    glCreateBuffers(1, &vbo_line);
+    glVertexArrayVertexBuffer(vao_line, 0, vbo_line, 0, 12);
+    glEnableVertexArrayAttrib(vao_line, 0);
+    glVertexArrayAttribBinding(vao_line, 0, 0);
+    glVertexArrayAttribFormat(vao_line, 0, 3, GL_FLOAT, GL_FALSE, 0);
+
+    float triangle[]{
+        0.0f, 0.0f,
+        1.0f, 0.0f,
+        1.0f, 1.0f,
+    };
+    unsigned ebo[]{0,1,2};
+
+    glNamedBufferStorage(vbo_plane, 24, triangle, 0);
+    glNamedBufferStorage(ebo_plane, 12, ebo, 0);
+
+    auto& window = app_state.window;
+    while(glfwWindowShouldClose(window.pglfw_window) == false) {
+        glfwPollEvents();
+
+        glClear(GL_COLOR_BUFFER_BIT);
+        glBindVertexArray(vao_plane);
+        glUseProgram(program_plane);
+        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, 0);
+
+        glfwSwapBuffers(window.pglfw_window);
+    }
 //     Engine::initialise("3DGraph", 1920, 1080);
 //     auto &eng        = Engine::instance();
 //     auto &gpu        = *eng.get_gpu_res_mgr();
@@ -539,7 +633,7 @@ int main() {
     return 0;
 }
 
-static void start_application() {
+static void start_application(const char* window_title, uint32_t window_width, uint32_t window_height) {
     // initialise opengl and create window
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
@@ -547,6 +641,7 @@ static void start_application() {
     glfwWindowHint(GLFW_OPENGL_COMPAT_PROFILE, GLFW_OPENGL_FORWARD_COMPAT);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
+    app_state.window = g3d::Window{window_title, window_width, window_height};
     app_state.window.pglfw_window = glfwCreateWindow(app_state.window.width, app_state.window.height, app_state.window.title, 0, 0);
     assert(app_state.window.pglfw_window && "Could not create the window");
 

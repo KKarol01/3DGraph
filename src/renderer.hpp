@@ -24,6 +24,7 @@ namespace g3d {
 
 /* Definitions */
     struct Window {
+        explicit Window();
         explicit Window(const char* title, uint32_t width, uint32_t height);
 
         GLFWwindow *pglfw_window{nullptr};
