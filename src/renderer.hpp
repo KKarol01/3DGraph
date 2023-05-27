@@ -1,13 +1,15 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 
 struct GLFWwindow;
 
 namespace g3d {
 /* Forward Declarations */
     struct Window;
-
+    struct Framebuffer;
+    struct Texture;
     struct RenderState;
     struct Renderer;
 
@@ -21,7 +23,6 @@ namespace g3d {
     //typedef uint32_t ;
     //typedef uint32_t HandleFramebuffer;
 
-
 /* Definitions */
     struct Window {
         explicit Window();
@@ -31,18 +32,23 @@ namespace g3d {
         uint32_t width{0}, height{0};
         char title[64];
     };
+    struct Framebuffer {
+        uint32_t handle{0};
+        std::vector<std::pair<uint32_t, Texture*>> textures;
+    };
+    struct Texture {
+        uint32_t handle{0};
+        uint32_t target{0}, format{0};
+        uint32_t width{0}, height{0};
+    };
     struct RenderState {
         HandleVao vao;
         HandleProgram program;
+        uint32_t viewport_width{0}, viewport_heigth{0};
     };
     struct Renderer {
         void render();
 
         private:
-    };
-
-    enum class RenderFlag {
-        CULL_FACE  = 1 << 0,
-        DEPTH_TEST = 1 << 1,
     };
 } // namespace g3d

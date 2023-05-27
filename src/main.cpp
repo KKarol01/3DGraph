@@ -2,6 +2,8 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <iostream>
+#include <filesystem>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -14,21 +16,55 @@
 #include <orbital_camera.hpp>
 #include <renderer.hpp>
 
+struct Function {
+    std::string name, value;
+};
+struct Slider {
+    Slider() = default;
+    Slider(const std::string &name, float value) : name{name}, value{value} {}
+
+    std::string name;
+    float value{0.f}, min{0.f}, max{1.0f};
+};
+struct Constant {
+    std::string name;
+    float value{0.f};
+};
+
 struct AppState {
     g3d::Window window;
+    g3d::OrbitalCamera camera;
+    g3d::Framebuffer framebuffer_main;
+
+    std::vector<Function> functions;
+    std::vector<Slider> sliders;
+    std::vector<Constant> constants;
+
+    struct PlaneSettings {
+        uint32_t detail{3}, bounds{1};
+    } plane_settings;
 } app_state;
 
-// OrbitalCamera *orb_cam;
-// float imgui_mouse_wheel{0.f};
 // static void draw_settings_panel();
-
 // template <typename T, typename DRAW_CB> static void display_2col_list(std::vector<T> &data, DRAW_CB draw_callback);
 
 static void start_application(const char* window_title, uint32_t window_width, uint32_t window_height);
 static void terminate_application();
+static void on_window_resize(GLFWwindow*, int, int);
 
-// static void save_project(const char *file_name);
-// static void load_project(const char *file_name);
+static void imgui_newframe();
+static void imgui_renderframe();
+
+static void resize_main_frambuffer(uint32_t width, uint32_t height);
+static void set_rendering_state_opengl(const g3d::RenderState&);
+static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader);
+static void draw_gui();
+
+static void uniform1f(uint32_t program, const char* name, float value);
+static void uniformm4(uint32_t program, const char* name, const glm::mat4& value);
+
+//static void save_project(const char *file_name);
+//static void load_project(const char *file_name);
 
 // static glm::vec4 background_color{0.1};
 // struct {
@@ -36,24 +72,6 @@ static void terminate_application();
 //     unsigned bounds;
 // } plane_setttings;
 
-// struct Function {
-//     std::string name, value;
-// };
-// struct Slider {
-//     Slider() = default;
-//     Slider(const std::string &name, float value) : name{name}, value{value} {}
-
-//     std::string name;
-//     float value{0.f}, min{0.f}, max{1.0f};
-// };
-// struct Constant {
-//     std::string name;
-//     float value{0.f};
-// };
-
-// std::vector<Function> functions;
-// std::vector<Slider> sliders;
-// std::vector<Constant> constants;
 
 int main() {
     start_application("3DCalc", 1280, 960);
@@ -81,6 +99,7 @@ int main() {
     glTextureStorage2D(texture_fmain_depth_stencil, 1, GL_DEPTH24_STENCIL8, app_state.window.width, app_state.window.height);
     glNamedFramebufferTexture(framebuffer_main, GL_COLOR_ATTACHMENT0, texture_fmain_color, 0);
     glNamedFramebufferTexture(framebuffer_main, GL_DEPTH_STENCIL_ATTACHMENT, texture_fmain_depth_stencil, 0);
+    glNamedFramebufferDrawBuffer(framebuffer_main, GL_COLOR_ATTACHMENT0);
     assert((glCheckNamedFramebufferStatus(framebuffer_main, GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) && "Main framebuffer initialisation error.");
 
     program_plane = glCreateProgram();
@@ -90,8 +109,10 @@ int main() {
     const char* shader_plane_vert_src = R"glsl(
         #version 460 core
         layout(location=0) in vec2 position;
+        uniform mat4 p;
+        uniform mat4 v;
 
-        void main() {gl_Position = vec4(position, 0.0, 1.0); }
+        void main() {gl_Position = p * v * vec4(position * 10.0, 0.0, 1.0); }
     )glsl";
 
     const char* shader_plane_frag_src = R"glsl(
@@ -103,10 +124,8 @@ int main() {
 
     glShaderSource(shader_plane_vert, 1, &shader_plane_vert_src, 0);
     glShaderSource(shader_plane_frag, 1, &shader_plane_frag_src, 0);
-    glCompileShader(shader_plane_vert);
-    glCompileShader(shader_plane_frag);
-    glAttachShader(program_plane, shader_plane_vert);
-    glAttachShader(program_plane, shader_plane_frag);
+    glCompileShader(shader_plane_vert); glCompileShader(shader_plane_frag);
+    glAttachShader(program_plane, shader_plane_vert); glAttachShader(program_plane, shader_plane_frag);
     glLinkProgram(program_plane);
     {
         int link_status = 0;
@@ -130,94 +149,73 @@ int main() {
     glVertexArrayAttribBinding(vao_line, 0, 0);
     glVertexArrayAttribFormat(vao_line, 0, 3, GL_FLOAT, GL_FALSE, 0);
 
-    float triangle[]{
-        0.0f, 0.0f,
-        1.0f, 0.0f,
-        1.0f, 1.0f,
-    };
-    unsigned ebo[]{0,1,2};
+     {
+        float vbo[] {-1.0,  1.0, 1.0,  1.0, -1.0, -1.0, 1.0, -1.0 };
+        unsigned ebo[]{0, 1, 2, 2, 1, 3};
+        float lineverts[]{ -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,-1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,-1.0, 0.0, 0.0, 1.0 };
 
-    glNamedBufferStorage(vbo_plane, 24, triangle, 0);
-    glNamedBufferStorage(ebo_plane, 12, ebo, 0);
+        glNamedBufferStorage(vbo_plane, sizeof(vbo), vbo, 0);
+        glNamedBufferStorage(ebo_plane, sizeof(ebo), ebo, 0);
+        glNamedBufferStorage(vbo_line,  sizeof(lineverts), lineverts, 0);
+    }
+
+    g3d::Texture texture_fmain_color_wrapped {
+        .handle = texture_fmain_color,
+        .target = GL_TEXTURE_2D, .format = GL_RGB8,
+        .width = app_state.window.width, .height = app_state.window.height
+    };
+    g3d::Texture texture_fmain_depth_stencil_wrapped {
+        .handle = texture_fmain_depth_stencil,
+        .target = GL_TEXTURE_2D, .format = GL_DEPTH24_STENCIL8,
+        .width = app_state.window.width, .height = app_state.window.height
+    };
+
+
+    // App State Initialisation    
+    app_state.camera = g3d::OrbitalCamera{&app_state.window, g3d::OrbitalCameraSettings{90.0f, 0.01f, 100.0f}};
+    app_state.framebuffer_main = g3d::Framebuffer{
+        .handle = framebuffer_main,
+        .textures = {{GL_COLOR_ATTACHMENT0,          &texture_fmain_color_wrapped},
+                     {GL_DEPTH_STENCIL_ATTACHMENT,   &texture_fmain_depth_stencil_wrapped}
+        }
+    };
+    // Function "f" shall always be present
+    app_state.functions.push_back(Function{"f", "sin(x*10.0)"});
+
+    // Rendering States
+    g3d::RenderState plane_render_state{ 
+        .vao = vao_plane, .program = program_plane 
+    };
 
     auto& window = app_state.window;
+    create_plane_shader_source_and_compile(program_plane, shader_plane_vert, shader_plane_frag);
     while(glfwWindowShouldClose(window.pglfw_window) == false) {
         glfwPollEvents();
+        imgui_newframe();
+        app_state.camera.update();
 
+        glBindFramebuffer(GL_FRAMEBUFFER, app_state.framebuffer_main.handle);
+        glViewport(0, 0, app_state.framebuffer_main.textures[0].second->width, app_state.framebuffer_main.textures[0].second->height);
         glClear(GL_COLOR_BUFFER_BIT);
-        glBindVertexArray(vao_plane);
-        glUseProgram(program_plane);
-        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, 0);
+        set_rendering_state_opengl(plane_render_state);
+        uniformm4(program_plane, "v", app_state.camera.view_matrix());
+        uniformm4(program_plane, "p", app_state.camera.projection_matrix());
+        uniform1f(program_plane, "detail", app_state.plane_settings.detail);
+        uniform1f(program_plane, "size", app_state.plane_settings.bounds);
+        uniform1f(program_plane, "TIME", (float)glfwGetTime());
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, app_state.plane_settings.detail * app_state.plane_settings.detail);
 
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, app_state.window.width, app_state.window.height);
+        glClear(GL_COLOR_BUFFER_BIT);
+        draw_gui();
+
+        imgui_renderframe();
         glfwSwapBuffers(window.pglfw_window);
     }
-//     Engine::initialise("3DGraph", 1920, 1080);
-//     auto &eng        = Engine::instance();
-//     auto &gpu        = *eng.get_gpu_res_mgr();
-//     auto &win        = *eng.get_window();
-//     auto &gui        = *eng.get_gui();
-//     orb_cam          = new OrbitalCamera{&win, OrbitalCameraSettings{90.0f, 0.1f, 100.0f}};
-//     auto *buffer_vbo = gpu.create_resource(GLBuffer{GL_DYNAMIC_STORAGE_BIT});
-//     auto *buffer_ebo = gpu.create_resource(GLBuffer{GL_DYNAMIC_STORAGE_BIT});
-//     auto *line_vbo   = gpu.create_resource(GLBuffer{GL_DYNAMIC_STORAGE_BIT});
-//     GLVao *line_vao, *vao;
-//     ShaderProgram *line_shader = gpu.create_resource(ShaderProgram{"default/axis"});
-//     // clang-format off
-//     {
-//     float vbo[] {
-//         -1.0,  1.0,
-//          1.0,  1.0,
-//         -1.0, -1.0,
-//          1.0, -1.0
-//     };
-//     unsigned ebo[]{0, 1, 2, 2, 1, 3};
-//         buffer_vbo->push_data(vbo, sizeof(vbo));
-//         buffer_ebo->push_data(ebo, sizeof(ebo));
-//         vao = gpu.create_resource(GLVao{{GLVaoBinding{0, buffer_vbo->res_handle(), 8, 0}},
-//                                               {GLVaoAttribute{0, 0, 2, 0}},
-//                                               buffer_ebo->res_handle()});
 
-//         float lineverts[]{
-//             -1.0, 0.0, 0.0, 1.0, 0.0, 0.0,
-//              0.0,-1.0, 0.0, 0.0, 1.0, 0.0,
-//              0.0, 0.0,-1.0, 0.0, 0.0, 1.0,
-//         };
-//         line_vbo->push_data(lineverts, sizeof(lineverts));
-//         line_vao = gpu.create_resource(GLVao{
-//                     {GLVaoBinding{0, line_vbo->res_handle(), 12, 0}},
-//                     {GLVaoAttribute{0, 0, 3, 0}} });
-//         // clang-format on
-//     }
-
-//     ShaderProgram *shader = nullptr;
-
-//     auto *texture_render
-//         = gpu.create_resource(Texture{TextureSettings{}, TextureDataDescriptor{1920, 1080}});
-//     auto *texture_depth = gpu.create_resource(
-//         Texture{TextureSettings{GL_DEPTH24_STENCIL8, GL_CLAMP_TO_EDGE, GL_LINEAR, 1},
-//                 TextureDataDescriptor{1920, 1080}});
-
-//     FramebufferAttachment fbo_attachments[]{
-//         FramebufferAttachment{GL_COLOR_ATTACHMENT0, texture_render->res_handle()},
-//         FramebufferAttachment{GL_DEPTH_STENCIL_ATTACHMENT, texture_depth->res_handle()}};
-//     auto *fbo = gpu.create_resource(Framebuffer{{fbo_attachments[0], fbo_attachments[1]}});
-
-//     ImVec2 canvas_size, image_size;
-//     auto resize_fbo = [&](auto w, auto h) {
-//         texture_render = gpu.create_resource(
-//             Texture{TextureSettings{}, TextureDataDescriptor{(int)w, (int)h}});
-//         texture_depth = gpu.create_resource(
-//             Texture{TextureSettings{GL_DEPTH24_STENCIL8, GL_CLAMP_TO_EDGE, GL_LINEAR, 1},
-//                     TextureDataDescriptor{(int)w, (int)h}});
-
-//         fbo_attachments[0]
-//             = FramebufferAttachment{GL_COLOR_ATTACHMENT0, texture_render->res_handle()};
-//         fbo_attachments[1]
-//             = FramebufferAttachment{GL_DEPTH_STENCIL_ATTACHMENT, texture_depth->res_handle()};
-
-//         fbo->update_attachments({fbo_attachments[0], fbo_attachments[1]});
-//     };
-
+// canvas size, image size
 //     bool needs_a_resize      = true;
 //     bool needs_recompilation = true;
 //     win.on_resize.connect([&](auto, auto) { needs_a_resize = true; });
@@ -225,67 +223,7 @@ int main() {
 //     functions.push_back({"f", "0.0"});
 
 //     auto recompile_shader = [&] {
-//         std::cout << "Recompiling\n";
-
-//         std::string forward_declarations;
-//         std::string function_definitions;
-//         std::string uniforms;
-//         std::string consts;
-
-//         for (const auto &f : functions) {
-//             forward_declarations += "float " + f.name + "(float,float);\n";
-//             function_definitions += "float " + f.name + "(float x,float z){return ";
-//             function_definitions += f.value + ";}\n";
-//         }
-
-//         for (const auto &c : constants) {
-//             consts += "const float " + c.name + "=" + std::to_string(c.value) + ";\n";
-//         }
-
-//         for (const auto &s : sliders) { uniforms += "uniform float " + s.name + ";\n"; }
-
-//         std::string shader_source;
-//         shader_source += "#version 460 core\n"
-//                          "layout(location=0)in vec2 in_pos;\n"
-//                          "uniform mat4 p;\n"
-//                          "uniform mat4 v;\n"
-//                          "uniform mat4 m;\n"
-//                          "uniform float TIME;\n"
-//                          "uniform float detail;\n"
-//                          "uniform float size;\n";
-//         shader_source += uniforms;
-//         shader_source += forward_declarations;
-//         shader_source += consts;
-//         shader_source += R"glsl(
-// void main() {
-//     vec2 ip = in_pos * 0.5+0.5;
-//     float inv_detail = size/detail;
-//     ip = ip * inv_detail - size*0.5;
-//     ip.x += float(gl_InstanceID % uint(detail)) * inv_detail;
-//     ip.y += float(gl_InstanceID / uint(detail)) * inv_detail;
-//     float x = ip.x;
-//     float y = ip.y;
-
-//     gl_Position = p * v * vec4(x, f(x,y), y, 1.0);
-// }
-// )glsl";
-//         shader_source += function_definitions;
-
-//         std::string frag_src = R"glsl(
-//             #version 460 core
-//             out vec4 FRAG_COLOR;
-//             void main() { FRAG_COLOR = vec4(1.0); }
-//         )glsl";
-
-//         try {
-//             if (shader == nullptr) {
-//                 shader = gpu.create_resource(ShaderProgram{
-//                     {{ShaderType::Vertex, shader_source}, {ShaderType::Fragment, frag_src}}});
-//             }
-//             *shader = ShaderProgram{
-//                 {{ShaderType::Vertex, shader_source}, {ShaderType::Fragment, frag_src}}};
-//         } catch (const std::exception &e) { std::cout << e.what(); }
-//     };
+//      
 //     gui.add_draw([&]() {
 //         auto main_screen_flags
 //             = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_MenuBar;
@@ -656,11 +594,231 @@ static void start_application(const char* window_title, uint32_t window_width, u
     ImGui_ImplGlfw_InitForOpenGL(app_state.window.pglfw_window, true);
     ImGui_ImplOpenGL3_Init("#version 460 core");
     ImGui::StyleColorsDark();
+
+    glfwSetFramebufferSizeCallback(app_state.window.pglfw_window, on_window_resize);
 }
 
 static void terminate_application() {
     
 }
+static void imgui_newframe() {
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+}
+static void imgui_renderframe() {
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
+static void resize_main_frambuffer(uint32_t width, uint32_t height) {
+    for(auto& [attachment, t] : app_state.framebuffer_main.textures) {
+        t->width = width;
+        t->height= height;
+
+        glDeleteTextures(1, &t->handle);
+        glCreateTextures(t->target, 1, &t->handle);
+        glTextureStorage2D(t->handle, 1, t->format, t->width, t->height);
+        glNamedFramebufferTexture(app_state.framebuffer_main.handle, attachment, t->handle, 0);
+    }
+}
+static void set_rendering_state_opengl(const g3d::RenderState& state) {
+    glBindVertexArray(state.vao);
+    glUseProgram(state.program);
+}
+static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g3d::HandleShader& vertex_shader, g3d::HandleShader& fragment_shader) {
+    std::string forward_declarations;
+    std::string function_definitions;
+    std::string uniforms;
+    std::string consts;
+
+    auto& functions = app_state.functions;
+    auto& constants = app_state.constants;
+    auto& sliders   = app_state.sliders;
+
+    for (const auto &f : functions) {
+        forward_declarations += "float " + f.name + "(float,float);\n";
+        function_definitions += "float " + f.name + "(float x,float z){return " + f.value + ";}\n"; }
+    for (const auto &c : constants) { consts += "const float " + c.name + "=" + std::to_string(c.value) + ";\n"; }
+    for (const auto &s : sliders) { uniforms += "uniform float " + s.name + ";\n"; }
+
+    std::string shader_source;
+    shader_source += "#version 460 core\n"
+                     "layout(location=0) in vec2 in_pos;\n"
+                     "uniform mat4 p;\n"
+                     "uniform mat4 v;\n"
+                     "uniform float TIME;\n"
+                     "uniform float detail;\n"
+                     "uniform float size;\n";
+    shader_source += uniforms;
+    shader_source += forward_declarations;
+    shader_source += consts;
+    shader_source += R"glsl(
+        void main() {
+            vec2 ip = in_pos * 0.5+0.5;
+            float inv_detail = size/detail;
+            ip = ip * inv_detail - size*0.5;
+            ip.x += float(gl_InstanceID % uint(detail)) * inv_detail;
+            ip.y += float(gl_InstanceID / uint(detail)) * inv_detail;
+            float x = ip.x;
+            float y = ip.y;
+
+            gl_Position = p * v * vec4(x, f(x,y), y, 1.0);
+        })glsl";
+        shader_source += function_definitions;
+
+        std::string frag_src = R"glsl(
+            #version 460 core
+            out vec4 FRAG_COLOR;
+            void main() { FRAG_COLOR = vec4(1.0); }
+        )glsl";
+
+    const auto *vertex_source = shader_source.c_str();
+    const auto *fragment_source   = frag_src.c_str();
+
+    g3d::HandleShader new_vertex_shader, new_fragment_shader;
+    new_vertex_shader   = glCreateShader(GL_VERTEX_SHADER); 
+    new_fragment_shader = glCreateShader(GL_FRAGMENT_SHADER); 
+    glShaderSource(new_vertex_shader, 1, &vertex_source, 0);
+    glShaderSource(new_fragment_shader, 1, &fragment_source, 0);
+    glCompileShader(new_vertex_shader); glCompileShader(new_fragment_shader);
+
+    char* error_log = nullptr;
+    const auto get_shader_compilation_error_message = [&](g3d::HandleShader shader){
+        int compile_status;
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &compile_status);
+
+        if(compile_status != GL_TRUE) {
+            glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &compile_status);
+            error_log = (char*)malloc(compile_status);
+            assert(error_log != nullptr && "Could not allocate memory for shader error log. Possibly the system has no free memory.");
+            glGetShaderInfoLog(shader, compile_status, &compile_status, error_log);
+        }
+    };
+
+    get_shader_compilation_error_message(new_vertex_shader);
+    if(error_log != nullptr) {
+        std::string error_message;
+        error_message += "[SHADER COMPILATION ERROR]: \"";
+        error_message += error_log; error_message += "\"";
+        delete[] error_log;
+        throw std::runtime_error{error_message};
+    }
+
+    glDetachShader(program, vertex_shader); glDetachShader(program, fragment_shader);
+    glDeleteShader(vertex_shader); glDeleteShader(fragment_shader);
+    glAttachShader(program, new_vertex_shader); glAttachShader(program, new_fragment_shader);
+    glLinkProgram(program);
+    vertex_shader   = new_vertex_shader; 
+    fragment_shader = new_fragment_shader;
+}
+
+static void draw_menu_bar();
+static void draw_left_child();
+static void draw_right_child();
+static void draw_gui() {
+    auto main_screen_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_MenuBar;
+    auto &window = app_state.window;
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(window.width, window.height));
+    if (ImGui::Begin("main screen", 0, main_screen_flags)) {
+        draw_menu_bar();
+        draw_left_child();
+      //  draw_right_child();
+    }
+    ImGui::End();
+}
+static void on_window_resize(GLFWwindow*, int width, int height) {
+    app_state.window.width  = static_cast<uint32_t>(width);
+    app_state.window.height = static_cast<uint32_t>(height);
+}
+
+
+static void draw_menu_bar() {
+    if (ImGui::BeginMenuBar()) {
+        if(ImGui::BeginMenu("Project...")) {
+            if (ImGui::Button("Open project")) {
+                nfdchar_t *outPath = NULL;
+                nfdresult_t result = NFD_OpenDialog("3dg", std::filesystem::current_path().string().c_str(), &outPath);
+                if (result == NFD_OKAY) {
+                //   load_project(outPath);
+                //   needs_recompilation = true;
+                }
+            }
+        // if (ImGui::Button("Save project")) { save_project("test.3dg"); }
+            ImGui::Button("Export project to obj");
+            ImGui::EndMenu();
+        }
+
+        ImGui::EndMenuBar();
+    }
+}
+static void draw_left_child() {
+    static auto left_split_width_factor = 0.7f;
+    auto left_split_size                = ImGui::GetContentRegionAvail();
+    left_split_size.x *= left_split_width_factor;
+
+    ImVec2 canvas_size;
+    if (ImGui::BeginChild("left split", left_split_size, true)) {
+        const auto left_split_content = ImGui::GetContentRegionAvail();
+        const auto aspect = (float)app_state.window.width / (float)app_state.window.height;
+        canvas_size = ImVec2(left_split_content.x, left_split_content.x / aspect);
+
+        if (ImGui::BeginChild("canvas", canvas_size, true)) {
+            const auto handle = app_state.framebuffer_main.textures[0].second->handle;
+            const auto image_size  = ImGui::GetContentRegionAvail();
+
+            auto _pos = ImGui::GetCursorPos();
+            ImGui::InvisibleButton("is canvas hovered", ImVec2(image_size.x, image_size.y));
+            if (ImGui::IsItemHovered()) {
+                app_state.camera.set_mouse_state(false);
+                app_state.camera.set_wheel_state(false);
+            } else {
+                app_state.camera.set_mouse_state(true);
+                app_state.camera.set_wheel_state(true);
+            }
+
+            ImGui::SetCursorPos(_pos);
+
+            // if (needs_a_resize) {
+            //     needs_a_resize = false;
+            //     resize_fbo(image_size.x, image_size.y);
+            // }
+
+            ImGui::Image((void *)(handle), image_size);
+        }
+        ImGui::EndChild();
+
+        if (ImGui::BeginChild("logs", ImVec2(0, 0), true, ImGuiWindowFlags_MenuBar)) {
+            if (ImGui::BeginMenuBar()) {
+                ImGui::Text("Logs");
+                ImGui::EndMenuBar();
+            }
+        }
+        ImGui::EndChild();
+    }
+
+    auto &style = ImGui::GetStyle();
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() - style.ItemSpacing.x);
+    ImGui::Button("##split factor slider", ImVec2(10.0f, left_split_size.y));
+    if (ImGui::IsItemActive()) {
+        left_split_width_factor += ImGui::GetMouseDragDelta(0, 0.01).x / (float)app_state.window.width;
+        left_split_width_factor = glm::clamp(left_split_width_factor, 0.5f, 0.8f);
+        ImGui::ResetMouseDragDelta();
+    }
+    if (ImGui::IsItemDeactivated() && ImGui::IsMouseReleased(0)) {
+        //resize_fbo((uint32_t)image_size.x, (uint32_t)image_size.y);
+        resize_main_frambuffer(canvas_size.x, canvas_size.y);
+        app_state.camera.on_window_resize(canvas_size.x, canvas_size.y);
+    }   
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() - style.ItemSpacing.x);
+}
+static void draw_right_child() {
+
+}
+
 // static void draw_settings_panel() {
 //     if (ImGui::CollapsingHeader("Plane details")) {
 //         ImGui::SliderInt("Detail", (int *)&plane_setttings.detail, 0, 200);
@@ -791,3 +949,15 @@ static void terminate_application() {
 //         }
 //     }
 // }
+
+
+
+static void uniform1f(uint32_t program, const char* name, float value) {
+    const auto location = glGetUniformLocation(program, name);
+    glUniform1f(location, value);
+}
+
+static void uniformm4(uint32_t program, const char* name, const glm::mat4& value) {
+    const auto location = glGetUniformLocation(program, name);
+    glUniformMatrix4fv(location, 1, GL_FALSE, &value[0][0]);
+}

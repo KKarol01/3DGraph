@@ -1,40 +1,39 @@
 #pragma once
 
-// #include <glm/glm.hpp>
+#include <glm/glm.hpp>
 
-// struct GLFWwindow;
+namespace g3d {
+    struct Window;
+    
+    struct OrbitalCameraSettings {
+        explicit OrbitalCameraSettings() = default;
+        explicit OrbitalCameraSettings(float fovydeg) : fovydeg{fovydeg} {}
+        explicit OrbitalCameraSettings(float fovydeg, float near, float far)
+            : fovydeg{fovydeg}, near{near}, far{far} {}
 
-// namespace eng {
-//     struct Window;
-// }
+        float fovydeg{90.0f};
+        float near{0.01f}, far{100.0f};
+    };
 
-// struct OrbitalCameraSettings {
-//     explicit OrbitalCameraSettings(float fovydeg) : fovydeg{fovydeg} {}
-//     explicit OrbitalCameraSettings(float fovydeg, float near, float far)
-//         : fovydeg{fovydeg}, near{near}, far{far} {}
+    class OrbitalCamera {
+      public:
+        explicit OrbitalCamera() = default;
+        explicit OrbitalCamera(Window *window, OrbitalCameraSettings settings);
 
-//     float fovydeg{90.0f};
-//     float near{0.01f}, far{100.0f};
-// };
+        void update();
+        void on_window_resize(uint32_t width, uint32_t height);
+        void set_mouse_state(bool locked = false) { _mouse_locked = locked; }
+        void set_wheel_state(bool locked = false) { _wheel_locked = locked; }
+        glm::mat4 view_matrix() const;
+        glm::mat4 projection_matrix() const;
 
-// class OrbitalCamera {
-//   public:
-//     explicit OrbitalCamera(eng::Window *window, OrbitalCameraSettings settings);
+        OrbitalCameraSettings settings;
 
-//     void update();
-//     void set_mouse_state(bool locked = false) {_mouse_locked = locked;}
-//     void set_wheel_state(bool locked = false) {_wheel_locked = locked;}
-//     glm::mat4 view_matrix() const;
-//     glm::mat4 projection_matrix() const;
+      private:
+        void _calculate_projection_matrix(Window *);
 
-//     OrbitalCameraSettings settings;
-
-//   private:
-//     void _calculate_projection_matrix(eng::Window *);
-
-//     bool _mouse_locked = false, _wheel_locked = false;
-//     float _distance{2.0f}, _theta{1.0f}, _phi{0.0f};
-//     glm::mat4 _projection_matrix;
-
-//     friend void scroll_callback(GLFWwindow *, double, double);
-// };
+        bool _mouse_locked = false, _wheel_locked = false;
+        float _distance{2.0f}, _theta{1.0f}, _phi{0.0f};
+        glm::mat4 _projection_matrix;
+    };
+} // namespace g3d
