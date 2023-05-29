@@ -4,6 +4,8 @@
 #include <vector>
 #include <iostream>
 #include <filesystem>
+#include <map>
+#include <concepts>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -42,11 +44,22 @@ struct AppState {
 
     struct PlaneSettings {
         uint32_t detail{3}, bounds{1};
-    } plane_settings;
-} app_state;
+        float grid_step = 1.0;
+        float grid_line_thickness = 0.9;
 
-// static void draw_settings_panel();
-// template <typename T, typename DRAW_CB> static void display_2col_list(std::vector<T> &data, DRAW_CB draw_callback);
+        bool is_detail_affecting_grid_step = true;
+
+    } plane_settings;
+
+    bool needs_recompilation = false;
+
+    struct ColorSettings {
+        glm::vec4 color_background{0.3, 0.4, 0.5, 1.0};
+        glm::vec4 color_grid{0.4, 0.4, 0.4, 1.0};
+        glm::vec4 color_plane{0.3, 0.5, 0.4, 1.0};
+        glm::vec4 color_plane_grid{0.7, 0.5, 0.6, 1.0};
+    } color_settings;
+} app_state;
 
 static void start_application(const char* window_title, uint32_t window_width, uint32_t window_height);
 static void terminate_application();
@@ -58,20 +71,15 @@ static void imgui_renderframe();
 static void resize_main_frambuffer(uint32_t width, uint32_t height);
 static void set_rendering_state_opengl(const g3d::RenderState&);
 static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader);
+static void create_grid_shader_source_and_compile (g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader);
 static void draw_gui();
 
 static void uniform1f(uint32_t program, const char* name, float value);
+static void uniform3f(uint32_t program, const char* name, glm::vec3 value);
 static void uniformm4(uint32_t program, const char* name, const glm::mat4& value);
 
-//static void save_project(const char *file_name);
-//static void load_project(const char *file_name);
-
-// static glm::vec4 background_color{0.1};
-// struct {
-//     unsigned detail;
-//     unsigned bounds;
-// } plane_setttings;
-
+static void save_project(const char *file_name);
+static void load_project(const char *file_name);
 
 int main() {
     start_application("3DCalc", 1280, 960);
@@ -80,12 +88,10 @@ int main() {
     g3d::HandleTexture texture_fmain_color;
     g3d::HandleTexture texture_fmain_depth_stencil;
 
-    g3d::HandleProgram program_plane;
-    g3d::HandleProgram program_line;
-    g3d::HandleShader shader_plane_vert;
-    g3d::HandleShader shader_plane_frag;
-    g3d::HandleShader shader_line_vert;
-    g3d::HandleShader shader_line_frag;
+    g3d::HandleProgram program_plane;   g3d::HandleShader shader_plane_vert;    g3d::HandleShader shader_plane_frag;
+    g3d::HandleProgram program_plane_grid;   g3d::HandleShader shader_plane_grid_vert;    g3d::HandleShader shader_plane_grid_frag;
+    g3d::HandleProgram program_line;    g3d::HandleShader shader_line_vert;     g3d::HandleShader shader_line_frag;
+    g3d::HandleProgram program_grid;    g3d::HandleShader shader_grid_vert;     g3d::HandleShader shader_grid_frag;
 
     g3d::HandleVao vao_plane;
     g3d::HandleVao vao_line;
@@ -102,36 +108,9 @@ int main() {
     glNamedFramebufferDrawBuffer(framebuffer_main, GL_COLOR_ATTACHMENT0);
     assert((glCheckNamedFramebufferStatus(framebuffer_main, GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) && "Main framebuffer initialisation error.");
 
-    program_plane = glCreateProgram();
-    shader_plane_vert = glCreateShader(GL_VERTEX_SHADER);
-    shader_plane_frag = glCreateShader(GL_FRAGMENT_SHADER);
-
-    const char* shader_plane_vert_src = R"glsl(
-        #version 460 core
-        layout(location=0) in vec2 position;
-        uniform mat4 p;
-        uniform mat4 v;
-
-        void main() {gl_Position = p * v * vec4(position * 10.0, 0.0, 1.0); }
-    )glsl";
-
-    const char* shader_plane_frag_src = R"glsl(
-        #version 460 core
-        out vec4 FRAG_COLOR;
-
-        void main() { FRAG_COLOR = vec4(0.3, 1.0.xxx); }
-    )glsl";
-
-    glShaderSource(shader_plane_vert, 1, &shader_plane_vert_src, 0);
-    glShaderSource(shader_plane_frag, 1, &shader_plane_frag_src, 0);
-    glCompileShader(shader_plane_vert); glCompileShader(shader_plane_frag);
-    glAttachShader(program_plane, shader_plane_vert); glAttachShader(program_plane, shader_plane_frag);
-    glLinkProgram(program_plane);
-    {
-        int link_status = 0;
-        glGetProgramiv(program_plane, GL_LINK_STATUS, &link_status);
-        assert((link_status == GL_TRUE) && "Plane shader program could not be linked properly."); 
-    }
+    program_plane = glCreateProgram();  shader_plane_vert = glCreateShader(GL_VERTEX_SHADER); shader_plane_frag = glCreateShader(GL_FRAGMENT_SHADER);
+    program_plane_grid = glCreateProgram();  shader_plane_grid_vert = glCreateShader(GL_VERTEX_SHADER); shader_plane_grid_frag = glCreateShader(GL_FRAGMENT_SHADER);
+    program_grid  = glCreateProgram();  shader_grid_vert  = glCreateShader(GL_VERTEX_SHADER); shader_grid_frag  = glCreateShader(GL_FRAGMENT_SHADER);
 
     glCreateVertexArrays(1, &vao_plane);
     glCreateBuffers(1, &vbo_plane);
@@ -180,394 +159,72 @@ int main() {
         }
     };
     // Function "f" shall always be present
-    app_state.functions.push_back(Function{"f", "sin(x*10.0)"});
+    app_state.functions.push_back(Function{"f", "sin(x)"});
 
     // Rendering States
     g3d::RenderState plane_render_state{ 
         .vao = vao_plane, .program = program_plane 
     };
+    g3d::RenderState plane_grid_render_state{ 
+        .vao = vao_line, .program = program_plane_grid 
+    };
+    g3d::RenderState grid_render_state{ 
+        .vao = vao_line, .program = program_grid, .line_width = 2.0f
+    };
 
-    auto& window = app_state.window;
+    auto &window = app_state.window;
     create_plane_shader_source_and_compile(program_plane, shader_plane_vert, shader_plane_frag);
+    create_grid_shader_source_and_compile(program_grid, shader_grid_vert, shader_grid_frag);
     while(glfwWindowShouldClose(window.pglfw_window) == false) {
+        try {
+            if (app_state.needs_recompilation){ app_state.needs_recompilation = false; create_plane_shader_source_and_compile(program_plane, shader_plane_vert, shader_plane_frag); }            
+        } catch (std::exception &e) {
+            std::string msg = e.what();
+            msg = msg.substr(msg.rfind(':')+2, msg.rfind('\"') - msg.rfind(':')-2);
+            std::cerr << msg;
+        }
+
         glfwPollEvents();
         imgui_newframe();
         app_state.camera.update();
 
+        glEnable(GL_DEPTH_TEST);
         glBindFramebuffer(GL_FRAMEBUFFER, app_state.framebuffer_main.handle);
         glViewport(0, 0, app_state.framebuffer_main.textures[0].second->width, app_state.framebuffer_main.textures[0].second->height);
-        glClear(GL_COLOR_BUFFER_BIT);
+        auto &bc = app_state.color_settings.color_background;
+        glClearColor(bc.r, bc.g, bc.b, bc.a);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        set_rendering_state_opengl(grid_render_state);
+        uniformm4(program_grid, "v", app_state.camera.view_matrix());
+        uniformm4(program_grid, "p", app_state.camera.projection_matrix());
+        uniform1f(program_grid, "bounds", app_state.plane_settings.bounds);
+        uniform3f(program_grid, "user_color", app_state.color_settings.color_grid);
+        glDrawArraysInstanced(GL_LINES, 0, 2, app_state.plane_settings.bounds * 2 + 1);
+        glDrawArraysInstanced(GL_LINES, 4, 2, app_state.plane_settings.bounds * 2 + 1);
+
         set_rendering_state_opengl(plane_render_state);
         uniformm4(program_plane, "v", app_state.camera.view_matrix());
         uniformm4(program_plane, "p", app_state.camera.projection_matrix());
         uniform1f(program_plane, "detail", app_state.plane_settings.detail);
         uniform1f(program_plane, "size", app_state.plane_settings.bounds);
         uniform1f(program_plane, "TIME", (float)glfwGetTime());
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        uniform1f(program_plane, "grid_step", app_state.plane_settings.grid_step);
+        uniform1f(program_plane, "grid_line_thickness", app_state.plane_settings.grid_line_thickness);
+        uniform1f(program_plane, "detail_affects_step", app_state.plane_settings.is_detail_affecting_grid_step ? 1.0f : 0.0f);
+        uniform3f(program_plane, "user_color", app_state.color_settings.color_plane);
+        uniform3f(program_plane, "user_grid_color", app_state.color_settings.color_plane_grid);
+        for(const auto& s : app_state.sliders) { uniform1f(program_plane, s.name.c_str(), s.value); }
         glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, app_state.plane_settings.detail * app_state.plane_settings.detail);
-
+        
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, app_state.window.width, app_state.window.height);
         glClear(GL_COLOR_BUFFER_BIT);
         draw_gui();
 
         imgui_renderframe();
-        glfwSwapBuffers(window.pglfw_window);
+        glfwSwapBuffers(window.pglfw_window);   
+        window.has_just_resized = false;
     }
-
-// canvas size, image size
-//     bool needs_a_resize      = true;
-//     bool needs_recompilation = true;
-//     win.on_resize.connect([&](auto, auto) { needs_a_resize = true; });
-
-//     functions.push_back({"f", "0.0"});
-
-//     auto recompile_shader = [&] {
-//      
-//     gui.add_draw([&]() {
-//         auto main_screen_flags
-//             = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_MenuBar;
-
-//         ImGui::SetNextWindowPos(ImVec2(0, 0));
-//         ImGui::SetNextWindowSize(ImVec2(win.width(), win.height()));
-//         if (ImGui::Begin("main screen", 0, main_screen_flags)) {
-//             if (ImGui::BeginMenuBar()) {
-//                 if (ImGui::BeginMenu("Project...")) {
-//                     if (ImGui::Button("Open project")) {
-//                         nfdchar_t *outPath = NULL;
-//                         nfdresult_t result = NFD_OpenDialog("3dg", std::filesystem::current_path().string().c_str(), &outPath);
-//                         if (result == NFD_OKAY) {
-//                             load_project(outPath);
-//                             needs_recompilation = true;
-//                         }
-//                     }
-//                     if (ImGui::Button("Save project")) { save_project("test.3dg"); }
-//                     ImGui::Button("Export project to obj");
-//                     ImGui::EndMenu();
-//                 }
-
-//                 ImGui::EndMenuBar();
-//             }
-
-//             imgui_mouse_wheel                   = ImGui::GetIO().MouseWheel;
-//             auto &style                         = ImGui::GetStyle();
-//             static auto left_split_width_factor = 0.7f;
-//             auto left_split_size                = ImGui::GetContentRegionAvail();
-//             left_split_size.x *= left_split_width_factor;
-//             if (ImGui::BeginChild("left split", left_split_size, true)) {
-//                 auto left_split_content = ImGui::GetContentRegionAvail();
-//                 canvas_size = ImVec2(left_split_content.x, left_split_content.x / win.aspect());
-
-//                 if (ImGui::BeginChild("canvas", canvas_size, true)) {
-//                     glFinish();
-//                     auto handle = texture_render->handle();
-//                     image_size  = ImGui::GetContentRegionAvail();
-
-//                     auto _pos = ImGui::GetCursorPos();
-//                     ImGui::InvisibleButton("is canvas hovered", ImVec2(image_size.x, image_size.y));
-//                     if (ImGui::IsItemHovered()) {
-//                         orb_cam->set_mouse_state(false);
-//                         orb_cam->set_wheel_state(false);
-//                     } else {
-//                         orb_cam->set_mouse_state(true);
-//                         orb_cam->set_wheel_state(true);
-//                     }
-
-//                     ImGui::SetCursorPos(_pos);
-
-//                     if (needs_a_resize) {
-//                         needs_a_resize = false;
-//                         resize_fbo(image_size.x, image_size.y);
-//                     }
-
-//                     ImGui::Image((void *)(handle), image_size);
-//                 }
-//                 ImGui::EndChild();
-
-//                 if (ImGui::BeginChild("logs", ImVec2(0, 0), true, ImGuiWindowFlags_MenuBar)) {
-//                     if (ImGui::BeginMenuBar()) {
-//                         ImGui::Text("Logs");
-//                         ImGui::EndMenuBar();
-//                     }
-//                 }
-//                 ImGui::EndChild();
-//             }
-//             ImGui::EndChild();
-//             ImGui::SameLine();
-//             ImGui::SetCursorPosX(ImGui::GetCursorPosX() - style.ItemSpacing.x);
-//             ImGui::Button("##split factor slider", ImVec2(10.0f, left_split_size.y));
-//             if (ImGui::IsItemActive()) {
-//                 left_split_width_factor += ImGui::GetMouseDragDelta(0, 0.01).x / (float)win.width();
-//                 left_split_width_factor = glm::clamp(left_split_width_factor, 0.5f, 0.8f);
-//                 ImGui::ResetMouseDragDelta();
-//             }
-//             if (ImGui::IsItemDeactivated() && ImGui::IsMouseReleased(0)) {
-//                 resize_fbo((uint32_t)image_size.x, (uint32_t)image_size.y);
-//             }
-//             ImGui::SameLine();
-//             ImGui::SetCursorPosX(ImGui::GetCursorPosX() - style.ItemSpacing.x);
-//             if (ImGui::BeginChild("right split", ImGui::GetContentRegionAvail(), true)) {
-//                 enum class SelectedTab { Functions, Constants, Sliders, Settings };
-//                 static SelectedTab selected_tab = SelectedTab::Functions;
-//                 if (ImGui::BeginTabBar("shader tabs")) {
-//                     // clang-format off
-//                     static const char* tabs[]{ "Functions", "Constants", "Sliders", "Settings"};
-//                     static int tab_count = sizeof(tabs) / sizeof(const char*);
-
-//                     for(int i=0;i<tab_count; ++i) {
-//                         bool is_selected = (int)selected_tab == i;
-//                         if(is_selected) { ImGui::PushStyleColor(ImGuiCol_Tab, ImGui::GetStyle().Colors[ImGuiCol_TabActive]); }
-//                         if (ImGui::TabItemButton(tabs[i])) { selected_tab = (SelectedTab)i; }
-//                         if(is_selected) { ImGui::PopStyleColor(); }
-                        
-//                     }
-
-//                     // clang-format on
-//                     ImGui::EndTabBar();
-//                 }
-
-//                 const auto add_variable = [](auto &vec, const auto &val) {
-//                     std::string name = "_" + std::to_string(vec.size() + 1);
-//                     vec.push_back({name, val});
-//                 };
-
-//                 static int type_to_delete = -1;
-//                 static int idx_to_delete  = -1;
-//                 const auto draw_data      = [&](auto idx, auto &data, auto &storage) {
-//                     auto type = 0;
-//                     std::string name, value;
-//                     using T = std::remove_cvref_t<decltype(data)>;
-//                     if constexpr (std::same_as<T, Function>) {
-//                         type  = 1;
-//                         value = data.value;
-//                     } else if (std::same_as<T, Constant>) {
-//                         type  = 2;
-//                         value = std::to_string(data.value);
-//                     } else if (std::same_as<T, Slider>) {
-//                         type  = 3;
-//                         value = std::to_string(data.value);
-//                     }
-//                     name = data.name;
-
-//                     static int editing_idx           = -1;
-//                     static int editing_col           = -1;
-//                     static int should_focus_on_input = 0;
-//                     int is_any_clicked               = 0;
-//                     int is_any_hovered               = 0;
-
-//                     if (type < 3) {
-//                         ImGui::TableSetColumnIndex(0);
-//                         if (editing_idx == idx && editing_col == 1) {
-//                             if (should_focus_on_input) {
-//                                 ImGui::SetKeyboardFocusHere();
-//                                 should_focus_on_input = 0;
-//                             }
-//                             ImGui::InputText("##name_to_edit", &data.name);
-//                             if (ImGui::IsItemDeactivated()) {
-//                                 editing_idx         = -1;
-//                                 needs_recompilation = true;
-//                             }
-//                         } else {
-//                             is_any_clicked |= ImGui::Selectable(name.c_str()) << 0;
-//                             if (ImGui::BeginPopupContextItem()) {
-//                                 if (ImGui::Button("Delete")) {
-//                                     type_to_delete = type;
-//                                     idx_to_delete  = idx;
-//                                 }
-
-//                                 ImGui::EndPopup();
-//                             }
-//                         }
-//                         is_any_hovered |= ImGui::IsItemHovered() << 0;
-//                         ImGui::TableSetColumnIndex(1);
-//                         if (editing_idx == idx && editing_col == 2) {
-//                             if (should_focus_on_input) {
-//                                 ImGui::SetKeyboardFocusHere();
-//                                 should_focus_on_input = 0;
-//                             }
-//                             if (type == 1) {
-//                                 ImGui::InputText("##value_to_edit", &((Function &)data).value);
-//                             } else {
-//                                 ImGui::InputFloat("##value_to_edit", &((Constant &)data).value);
-//                             }
-//                             if (ImGui::IsItemDeactivated()) {
-//                                 editing_idx         = -1;
-//                                 needs_recompilation = true;
-//                             }
-//                         } else {
-//                             is_any_clicked |= ImGui::Selectable(value.c_str()) << 1;
-//                         }
-//                         is_any_hovered |= ImGui::IsItemHovered() << 1;
-//                     } else if (type == 3) {
-//                         ImGui::TableSetColumnIndex(0);
-//                         if (editing_idx == idx && editing_col == 1) {
-//                             if (should_focus_on_input) {
-//                                 ImGui::SetKeyboardFocusHere();
-//                                 should_focus_on_input = 0;
-//                             }
-//                             ImGui::InputText("##name_to_edit", &data.name);
-//                             if (ImGui::IsItemDeactivated()) {
-//                                 editing_idx         = -1;
-//                                 needs_recompilation = true;
-//                             }
-//                         } else {
-//                             is_any_clicked
-//                                 |= ImGui::Selectable(
-//                                        name.c_str(),
-//                                        false,
-//                                        0,
-//                                        ImVec2(0.0, ImGui::GetTextLineHeightWithSpacing() * 2.0))
-//                                    << 0;
-//                         }
-//                         is_any_hovered |= ImGui::IsItemHovered() << 0;
-//                         ImGui::TableSetColumnIndex(1);
-//                         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.3);
-//                         ImGui::InputFloat("Min", &((Slider &)data).min);
-//                         ImGui::SameLine();
-//                         ImGui::InputFloat("Max", &((Slider &)data).max);
-//                         ImGui::PopItemWidth();
-//                         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-//                         is_any_clicked |= ImGui::SliderFloat("##slider",
-//                                                              (float *)&data.value,
-//                                                              ((Slider &)data).min,
-//                                                              ((Slider &)data).max)
-//                                           << 1;
-//                         is_any_hovered |= ImGui::IsItemHovered() << 1;
-//                         if (ImGui::BeginPopupContextItem()) {
-//                             if (ImGui::Button("Delete")) {
-//                                 type_to_delete = type;
-//                                 idx_to_delete  = idx;
-//                             }
-
-//                             ImGui::EndPopup();
-//                         }
-//                     }
-
-//                     static int dragged_idx         = -1;
-//                     static int prev_is_any_hovered = is_any_hovered;
-//                     if (is_any_hovered && ImGui::IsMouseClicked(0)) {
-//                         dragged_idx = static_cast<int>(idx);
-//                     }
-//                     auto stopped_hovering = !is_any_hovered && prev_is_any_hovered;
-//                     if (dragged_idx == idx) { prev_is_any_hovered = is_any_hovered; }
-
-//                     if (idx == dragged_idx && stopped_hovering && ImGui::IsMouseDragging(0, 0.1f)) {
-//                         auto delta   = ImGui::GetMouseDragDelta().y;
-//                         auto new_idx = idx + (int)(delta > 0.0f ? 1 : delta < 0.0f ? -1 : 0);
-//                         new_idx      = glm::clamp((int)new_idx, 0, (int)storage.size() - 1);
-//                         ImGui::ResetMouseDragDelta();
-//                         if (idx == new_idx) { return; }
-//                         T temp_data      = data;
-//                         storage[idx]     = storage[new_idx];
-//                         storage[new_idx] = temp_data;
-//                         dragged_idx      = new_idx;
-//                     }
-
-//                     if (dragged_idx > -1 && ImGui::IsMouseReleased(0)) { dragged_idx = -1; }
-
-//                     if (editing_idx == -1 && is_any_hovered && ImGui::IsMouseDoubleClicked(0)) {
-//                         editing_idx           = idx;
-//                         editing_col           = is_any_hovered;
-//                         should_focus_on_input = 1;
-//                     }
-//                 };
-
-//                 if (idx_to_delete > -1) {
-//                     switch (type_to_delete) {
-//                     case 1: functions.erase(functions.begin() + idx_to_delete); break;
-//                     case 2: constants.erase(constants.begin() + idx_to_delete); break;
-//                     case 3: sliders.erase(sliders.begin() + idx_to_delete); break;
-//                     }
-//                     idx_to_delete = -1;
-//                 }
-
-//                 if (ImGui::BeginChild("right_split_content")) {
-//                     switch (selected_tab) {
-//                     case SelectedTab::Functions: {
-//                         if (ImGui::Button("Add new function")) {
-//                             add_variable(functions, "sin(x)");
-//                         }
-
-//                         display_2col_list(functions, draw_data);
-//                         break;
-//                     }
-//                     case SelectedTab::Constants: {
-//                         if (ImGui::Button("Add new constant")) { add_variable(constants, 0.0f); }
-//                         display_2col_list(constants, draw_data);
-//                         break;
-//                     }
-//                     case SelectedTab::Sliders: {
-//                         if (ImGui::Button("Add new slider")) { add_variable(sliders, 0.0f); }
-//                         display_2col_list(sliders, draw_data);
-//                         break;
-//                     }
-//                     case SelectedTab::Settings: {
-//                         draw_settings_panel();
-//                         break;
-//                     }
-//                     }
-//                 }
-//                 ImGui::EndChild();
-//             }
-//             ImGui::EndChild();
-//         }
-
-//         ImGui::End();
-//     });
-
-//     eng.on_update.connect([&] {
-//         if (needs_recompilation) {
-//             recompile_shader();
-//             needs_recompilation = false;
-//         }
-
-//         orb_cam->update();
-//         shader->use();
-//         shader->set("m", glm::scale(glm::mat4{1.0f}, glm::vec3{1.0}));
-//         shader->set("v", orb_cam->view_matrix());
-//         shader->set("p", orb_cam->projection_matrix());
-//         shader->set("TIME", (float)glfwGetTime());
-//         shader->set("size", (float)plane_setttings.bounds);
-//         shader->set("detail", (float)plane_setttings.detail);
-//         for (const auto &s : sliders) { shader->set(s.name, s.value); }
-
-//         vao->bind();
-//         fbo->bind();
-//         glViewport(0, 0, image_size.x, image_size.y);
-//         glClearColor(background_color.x, background_color.y, background_color.z, 1.0f);
-//         win.set_clear_flags(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-//         win.clear_framebuffer();
-//         glEnable(GL_DEPTH_TEST);
-//         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-
-//         glDrawElementsInstanced(
-//             GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, plane_setttings.detail * plane_setttings.detail);
-
-//         line_shader->use();
-//         line_shader->set("p", orb_cam->projection_matrix());
-//         line_shader->set("v", orb_cam->view_matrix());
-//         line_shader->set("span", (float)plane_setttings.bounds);
-//         glLineWidth(3.0);
-//         line_vao->bind();
-//         line_shader->set("color", glm::vec3{1.0, 0.0, 0.0});
-//         glDrawArrays(GL_LINES, 0, 2);
-//         line_shader->set("color", glm::vec3{0.0, 1.0, 0.0});
-//         glDrawArrays(GL_LINES, 2, 2);
-//         line_shader->set("color", glm::vec3{0.0, 0.0, 1.0});
-//         glDrawArrays(GL_LINES, 4, 2);
-//         glLineWidth(1.0);
-
-//         glBindFramebuffer(GL_FRAMEBUFFER, 0);
-//         glViewport(0, 0, win.width(), win.height());
-//     });
-//     recompile_shader();
-
-//     ImGui::GetIO().WantSaveIniSettings = true;
-//     ImGui::GetIO().IniSavingRate       = 1.0f;
-
-//     eng.start();
-//     Engine::exit();
-
     return 0;
 }
 
@@ -624,6 +281,7 @@ static void resize_main_frambuffer(uint32_t width, uint32_t height) {
 static void set_rendering_state_opengl(const g3d::RenderState& state) {
     glBindVertexArray(state.vao);
     glUseProgram(state.program);
+    glLineWidth(state.line_width);
 }
 static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g3d::HandleShader& vertex_shader, g3d::HandleShader& fragment_shader) {
     std::string forward_declarations;
@@ -653,23 +311,43 @@ static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g
     shader_source += forward_declarations;
     shader_source += consts;
     shader_source += R"glsl(
+        
+        out vec2 vfrag_pos;
         void main() {
-            vec2 ip = in_pos * 0.5+0.5;
-            float inv_detail = size/detail;
-            ip = ip * inv_detail - size*0.5;
+            vec2 ip = in_pos*0.5+0.5;
+            float inv_detail = 2.0*size/detail;
+            ip = ip * inv_detail - size;
             ip.x += float(gl_InstanceID % uint(detail)) * inv_detail;
             ip.y += float(gl_InstanceID / uint(detail)) * inv_detail;
             float x = ip.x;
             float y = ip.y;
-
-            gl_Position = p * v * vec4(x, f(x,y), y, 1.0);
-        })glsl";
+            vfrag_pos = vec2(x, y);
+            gl_Position = p * v * vec4(x, f(x,y), y, 1.0);}
+        
+        )glsl";
         shader_source += function_definitions;
 
         std::string frag_src = R"glsl(
             #version 460 core
             out vec4 FRAG_COLOR;
-            void main() { FRAG_COLOR = vec4(1.0); }
+            in vec2 vfrag_pos;
+            uniform vec3 user_color;
+            uniform vec3 user_grid_color;
+            uniform float grid_step;
+            uniform float grid_line_thickness;
+			uniform float detail;
+			uniform float detail_affects_step;
+            void main() { 
+                vec2 vp = vfrag_pos;
+                float detail_factor = detail_affects_step==1.0 ? detail : 1.0;
+                float fvpx = fract(vp.x*detail_factor/(grid_step)), fvpy = fract(vp.y*detail_factor/(grid_step));
+                float a = (1.0 - grid_line_thickness), b = grid_line_thickness;
+                float in_ab_range = (fvpx<a || fvpx>b || fvpy<a || fvpy>b) ? 1.0 : 0.0;
+                
+                vec3 color = mix(user_color, user_grid_color, in_ab_range);
+                FRAG_COLOR = vec4(color, 1.0); 
+            }
+        
         )glsl";
 
     const auto *vertex_source = shader_source.c_str();
@@ -712,6 +390,35 @@ static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g
     fragment_shader = new_fragment_shader;
 }
 
+static void create_grid_shader_source_and_compile(g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader) {
+    const char *vertex_source = R"glsl(
+        #version 460 core
+        layout(location=0) in vec3 pos;
+        uniform mat4 v;
+        uniform mat4 p;
+        uniform float bounds;
+
+        void main() {
+            const vec3 offset_dir = abs(cross(pos, vec3(0.0,1.0,0.0)));
+            vec3 offset = offset_dir * bounds;
+            vec3 calc_pos = pos*bounds - offset + offset_dir * float(gl_InstanceID);
+            gl_Position = p * v * vec4(calc_pos, 1.0);
+        }
+
+    )glsl";
+    const char *fragment_source = R"glsl(
+        #version 460 core
+        out vec4 FRAG_COLOR;
+        uniform vec3 user_color;
+        void main() { FRAG_COLOR = vec4(user_color, 1.0); }
+    )glsl";
+
+    glShaderSource(vertex_shader, 1, &vertex_source, 0); glShaderSource(fragment_shader, 1, &fragment_source, 0);
+    glCompileShader(vertex_shader); glCompileShader(fragment_shader);
+    glAttachShader(program, vertex_shader); glAttachShader(program, fragment_shader);
+    glLinkProgram(program);
+}
+
 static void draw_menu_bar();
 static void draw_left_child();
 static void draw_right_child();
@@ -722,12 +429,12 @@ static void draw_gui() {
     ImGui::SetNextWindowSize(ImVec2(window.width, window.height));
     if (ImGui::Begin("main screen", 0, main_screen_flags)) {
         draw_menu_bar();
-        draw_left_child();
-      //  draw_right_child();
+        draw_left_child(); ImGui::SameLine(); draw_right_child();
     }
     ImGui::End();
 }
 static void on_window_resize(GLFWwindow*, int width, int height) {
+    app_state.window.has_just_resized = true;
     app_state.window.width  = static_cast<uint32_t>(width);
     app_state.window.height = static_cast<uint32_t>(height);
 }
@@ -736,15 +443,36 @@ static void on_window_resize(GLFWwindow*, int width, int height) {
 static void draw_menu_bar() {
     if (ImGui::BeginMenuBar()) {
         if(ImGui::BeginMenu("Project...")) {
+            static std::string file_name;
             if (ImGui::Button("Open project")) {
                 nfdchar_t *outPath = NULL;
                 nfdresult_t result = NFD_OpenDialog("3dg", std::filesystem::current_path().string().c_str(), &outPath);
                 if (result == NFD_OKAY) {
-                //   load_project(outPath);
-                //   needs_recompilation = true;
+                    load_project(outPath);
+                    file_name = outPath;
+                    file_name = file_name.substr(file_name.rfind('\\')+1, file_name.rfind('.') - file_name.rfind('\\')-1);
+                    app_state.needs_recompilation = true;
                 }
             }
-        // if (ImGui::Button("Save project")) { save_project("test.3dg"); }
+        
+            if (ImGui::Button("Save project")) { 
+                ImGui::OpenPopup("save_project_popup");
+            }
+            if(ImGui::BeginPopup("save_project_popup")) {
+                ImGui::Text("Filename:"); ImGui::SameLine();
+                ImGui::PushItemWidth(160.0f);
+                ImGui::InputText("##Filename", &file_name);
+                const auto spacex = ImGui::GetContentRegionAvail().x;
+                ImGui::Indent(spacex - 100.0f);
+                if(ImGui::Button("Save", ImVec2(100.0f, 0.0f))) {
+                    std::string file_name_with_ext = file_name + ".3dg";
+                    save_project(file_name_with_ext.c_str()); 
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::PopItemWidth();
+                ImGui::EndPopup();
+            }
+            
             ImGui::Button("Export project to obj");
             ImGui::EndMenu();
         }
@@ -757,7 +485,7 @@ static void draw_left_child() {
     auto left_split_size                = ImGui::GetContentRegionAvail();
     left_split_size.x *= left_split_width_factor;
 
-    ImVec2 canvas_size;
+    ImVec2 canvas_size(1,1);
     if (ImGui::BeginChild("left split", left_split_size, true)) {
         const auto left_split_content = ImGui::GetContentRegionAvail();
         const auto aspect = (float)app_state.window.width / (float)app_state.window.height;
@@ -778,12 +506,6 @@ static void draw_left_child() {
             }
 
             ImGui::SetCursorPos(_pos);
-
-            // if (needs_a_resize) {
-            //     needs_a_resize = false;
-            //     resize_fbo(image_size.x, image_size.y);
-            // }
-
             ImGui::Image((void *)(handle), image_size);
         }
         ImGui::EndChild();
@@ -796,9 +518,9 @@ static void draw_left_child() {
         }
         ImGui::EndChild();
     }
+    ImGui::EndChild();
 
     auto &style = ImGui::GetStyle();
-    ImGui::EndChild();
     ImGui::SameLine();
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() - style.ItemSpacing.x);
     ImGui::Button("##split factor slider", ImVec2(10.0f, left_split_size.y));
@@ -807,154 +529,287 @@ static void draw_left_child() {
         left_split_width_factor = glm::clamp(left_split_width_factor, 0.5f, 0.8f);
         ImGui::ResetMouseDragDelta();
     }
-    if (ImGui::IsItemDeactivated() && ImGui::IsMouseReleased(0)) {
-        //resize_fbo((uint32_t)image_size.x, (uint32_t)image_size.y);
+    if ((ImGui::IsItemDeactivated() && ImGui::IsMouseReleased(0)) || app_state.window.has_just_resized) {
         resize_main_frambuffer(canvas_size.x, canvas_size.y);
         app_state.camera.on_window_resize(canvas_size.x, canvas_size.y);
     }   
-    ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() - style.ItemSpacing.x);
 }
+
+enum class SelectedTab { Functions, Constants, Sliders, Settings };
+static const char *SelectedTabNames[] { "Functions", "Constants", "Sliders", "Settings" };
+               
+static void draw_user_variables_table(SelectedTab tab);
 static void draw_right_child() {
+    static int selected_tab_idx = 0;
 
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().WindowPadding.x);
+    if(ImGui::BeginChild("right split", ImGui::GetContentRegionAvail(), true)) {
+        if(ImGui::BeginTabBar("right split tabs")) {
+            for(int i=0; i < 4; ++i) {
+                const char *name = SelectedTabNames[i];
+                const int is_tab_selected = selected_tab_idx == i;
+                if(is_tab_selected) { ImGui::PushStyleColor(ImGuiCol_Tab, ImGui::GetStyle().Colors[ImGuiCol_TabActive]); }
+                if(ImGui::TabItemButton(name)) { selected_tab_idx = i; }
+                if(is_tab_selected) { ImGui::PopStyleColor(); }
+            }
+            ImGui::EndTabBar();
+        }
+
+    
+        static const auto add_variable_button = [](const auto& btn_name, auto &vec, const auto &val) {
+            if(ImGui::Button(btn_name)) {
+                std::string name = "_" + std::to_string(vec.size() + 1);
+                vec.push_back({name, val});
+            }
+        };
+
+        switch (selected_tab_idx) {
+            case 0: {
+                add_variable_button("Add new function", app_state.functions, "0");                
+                draw_user_variables_table(SelectedTab::Functions);
+                break; 
+            }
+            case 1: {
+                add_variable_button("Add new constant", app_state.constants, 0.0f);                
+                draw_user_variables_table(SelectedTab::Constants); 
+                break; 
+            }
+            case 2: {
+                add_variable_button("Add new slider", app_state.sliders, 0.0f);                
+                draw_user_variables_table(SelectedTab::Sliders); 
+                break; 
+            }
+            case 3: {
+                if (ImGui::CollapsingHeader("Color Settings")) {
+                    ImGui::ColorEdit3("Background color", &app_state.color_settings.color_background.x);
+                    ImGui::ColorEdit3("Plane color", &app_state.color_settings.color_plane.x);
+                    ImGui::ColorEdit3("Grid color", &app_state.color_settings.color_grid.x);
+                    ImGui::ColorEdit3("Plane grid color", &app_state.color_settings.color_plane_grid.x);
+                }
+                if (ImGui::CollapsingHeader("Rendering Settings")) {
+                    ImGui::PushItemWidth(150.0);
+                    ImGui::SliderInt("Plane bounds", (int*)&app_state.plane_settings.bounds, 1, 100);
+                    ImGui::SliderInt("Plane detail level", (int*)&app_state.plane_settings.detail, 1, 1000);
+                    ImGui::SliderFloat("Plane grid step", &app_state.plane_settings.grid_step, 1.0f, 100.0f);
+                    ImGui::SliderFloat("Plane grid line thickness", &app_state.plane_settings.grid_line_thickness, 0.01f, 1.0f);
+                    ImGui::Checkbox("Plane detail affects grid step", &app_state.plane_settings.is_detail_affecting_grid_step);
+                    ImGui::PopItemWidth();
+                }
+                break; 
+            }
+        }
+
+    }
+    ImGui::EndChild();   
+}
+static void draw_user_variables_table(SelectedTab tab) {
+    static const auto draw_table = [](auto& data, auto draw_callback) {
+        const auto NUM_COLS    = 2;
+        const auto TABLE_FLAGS = ImGuiTableFlags_BordersH | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY;
+        const auto TABLE_SIZE = ImGui::GetContentRegionAvail();
+
+        if (ImGui::BeginTable("2ColListDT", NUM_COLS, TABLE_FLAGS, TABLE_SIZE)) {
+            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupScrollFreeze(NUM_COLS, 1);
+            ImGui::TableHeadersRow();
+
+            for (size_t i = 0; i < data.size(); ++i) {
+                ImGui::PushID(i + 1);
+                ImGui::TableNextRow();
+                draw_callback(i, data.at(i), data);
+                ImGui::PopID();
+            }
+
+            ImGui::EndTable();
+        }
+    };
+
+    static const auto EditableSelectable = [](size_t unique_idx, std::string &data, float overrided_height = 0.0f, bool disable_editing = false) {
+        static std::map<size_t, std::pair<bool, bool>> data_specific_settings;
+        auto &data_setting = data_specific_settings[unique_idx];
+        bool &is_editing = data_setting.first;
+        bool &focus_on_text_input = data_setting.second;
+
+        if(is_editing == false) {
+            ImGui::Selectable(data.c_str(), false, 0, ImVec2(ImGui::GetContentRegionAvail().x, overrided_height != 0.0f ? overrided_height : ImGui::GetTextLineHeightWithSpacing()));
+            if(disable_editing == false && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) { is_editing = true; focus_on_text_input = true; }
+        } else if(disable_editing == false) {
+            if(focus_on_text_input) { focus_on_text_input = false; ImGui::SetKeyboardFocusHere(); }
+            ImGui::InputText("##text", &data);
+            if(ImGui::IsItemDeactivated()) { is_editing = false; app_state.needs_recompilation = true; }
+        }
+
+    };
+
+    struct ItemState {
+        bool mouse_hovering{false};
+        bool mouse_just_stopped_hovering{false};
+        bool mouse_clicked{false};
+        bool mouse_double_clicked{false};
+    };
+    static const auto query_previous_item_state = [](ItemState& state) {
+        bool is_hovering = ImGui::IsItemHovered();
+        if(state.mouse_hovering && is_hovering == false) { state.mouse_just_stopped_hovering = true; }
+        else if(state.mouse_just_stopped_hovering)       { state.mouse_just_stopped_hovering = false; }
+        state.mouse_hovering        = is_hovering;
+        state.mouse_clicked         = ImGui::IsMouseClicked(0);
+        state.mouse_double_clicked  = ImGui::IsMouseDoubleClicked(0);
+    };
+
+    
+    static const auto draw_function = [&](size_t idx, auto& data, auto &data_vector){
+        static int swap_a=-1, swap_b=-1;
+        static int draging_idx = -1;
+        static std::map<size_t, ItemState> states;
+        ItemState &s1 = states[idx*2+0], &s2 = states[idx*2+1];
+
+        ImGui::TableSetColumnIndex(0);
+        float overrided_height = ImGui::GetTextLineHeightWithSpacing()*1.0f;
+        bool disable_editing   = false;
+        if      constexpr(std::same_as<std::remove_cvref_t<decltype(data)>, Slider>)    { overrided_height = 3.0f*ImGui::GetTextLineHeightWithSpacing(); }
+        else if constexpr(std::same_as<std::remove_cvref_t<decltype(data)>, Constant>)  { overrided_height = 1.1f*ImGui::GetTextLineHeightWithSpacing(); }
+        if(data.name == "f" && std::same_as<std::remove_cvref_t<decltype(data)>, Function>) { disable_editing = true; } //F function cannot be renamed by the user.
+        EditableSelectable(idx*2+0, data.name, overrided_height, disable_editing);
+        query_previous_item_state(s1);
+
+        ImGui::TableSetColumnIndex(1);
+        if constexpr(std::same_as<std::remove_cvref_t<decltype(data)>, Function>) {
+            EditableSelectable(idx*2+1, data.value);
+        } 
+        else if constexpr(std::same_as<std::remove_cvref_t<decltype(data)>, Constant>) {
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            if(ImGui::InputFloat("##const_value", &data.value, 0,0, "%.6f")) { app_state.needs_recompilation = true; }
+        }
+        else if constexpr(std::same_as<std::remove_cvref_t<decltype(data)>, Slider>) {
+            Slider &s = static_cast<Slider&>(data);
+            ImGui::PushItemWidth(45.0f);
+            ImGui::InputFloat("Min", &s.min); ImGui::SameLine(); ImGui::InputFloat("Max", &s.max);
+            ImGui::PushItemWidth(90.0f + 2.0f * ImGui::CalcTextSize("Min").x + ImGui::GetStyle().ItemSpacing.x*2.0f);
+            if(ImGui::SliderFloat("##value", &s.value, s.min, s.max, "%.2f")) { app_state.needs_recompilation = true; }
+            ImGui::PopItemWidth();
+            ImGui::PopItemWidth();
+        }
+        query_previous_item_state(s2);
+
+        bool just_stopped_hovering_any = s1.mouse_just_stopped_hovering;
+        bool hovering_any = s1.mouse_hovering | s2.mouse_hovering;
+
+        if(draging_idx == -1 && hovering_any && ImGui::IsMouseDragging(0, 0.1)) { draging_idx = static_cast<int>(idx); }
+
+        if(swap_a == -1 && (int)idx == draging_idx && just_stopped_hovering_any && ImGui::IsMouseDragging(0, 0.0f)) {
+            std::cout << ImGui::GetMouseDragDelta(0, 0.0f).y << ' ' << draging_idx << '\n';
+            int delta = ImGui::GetMouseDragDelta(0, 0.0f).y > 0.0f ? 1 : ImGui::GetMouseDragDelta(0, 0.0f).y < 0.0f ? -1 : 0;
+            if(delta == 0) { return; }
+            swap_a = idx;
+            swap_b = std::clamp((int)(idx + delta), (int)0, (int)data_vector.size()-1);
+            ImGui::ResetMouseDragDelta(0);
+        }
+
+        if(ImGui::IsMouseReleased(0)) { draging_idx = swap_a = swap_b = -1; }
+        if(idx == 0 && swap_a > -1 && swap_b > -1) {
+            auto temp = data_vector.at(swap_a);
+            data_vector.at(swap_a) = data_vector.at(swap_b);
+            data_vector.at(swap_b) = temp;
+            draging_idx = swap_b; swap_a = swap_b = -1;
+        }
+    };
+
+    switch (tab) {
+        case SelectedTab::Functions: { draw_table(app_state.functions, draw_function); break; }
+        case SelectedTab::Constants: { draw_table(app_state.constants, draw_function); break; }
+        case SelectedTab::Sliders:   { draw_table(app_state.sliders,   draw_function); break; }
+        default: { assert(false && "Unexpected tab."); }
+    }
 }
 
-// static void draw_settings_panel() {
-//     if (ImGui::CollapsingHeader("Plane details")) {
-//         ImGui::SliderInt("Detail", (int *)&plane_setttings.detail, 0, 200);
-//         ImGui::SameLine();
-//         ImGui::TextDisabled("(?)");
-//         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-//             ImGui::SetTooltip("Set into how many small squares the plane should be divided.");
-//         }
-//         ImGui::SliderInt("Bounds", (int *)&plane_setttings.bounds, 0, 200);
-//         ImGui::TextDisabled("(?)");
-//         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-//             ImGui::SetTooltip("Set how far the plane is stretched. 2 means the plane spans in both x and z from -2 to 2");
-//         }
-//     }
-//     if (ImGui::CollapsingHeader("Colors", ImGuiTreeNodeFlags_DefaultOpen)) {
-//         ImGui::ColorEdit4("Background", &background_color.x);
-//     }
-// }
-
-// template <typename T, typename DRAW_CB>
-// static void display_2col_list(std::vector<T> &data, DRAW_CB draw_callback) {
-
-//     const auto NUM_COLS    = 2;
-//     const auto TABLE_FLAGS = ImGuiTableFlags_BordersH | ImGuiTableFlags_RowBg
-//                              | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY;
-//     const auto TABLE_SIZE = ImGui::GetContentRegionAvail();
-
-//     if (ImGui::BeginTable("2ColListDT", NUM_COLS, TABLE_FLAGS, TABLE_SIZE)) {
-//         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
-//         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-//         ImGui::TableSetupScrollFreeze(NUM_COLS, 1);
-//         ImGui::TableHeadersRow();
-
-//         for (auto i = 0llu; i < data.size(); ++i) {
-//             ImGui::PushID(i + 1);
-//             ImGui::TableNextRow();
-//             ImGui::TableSetColumnIndex(0);
-//             draw_callback(i, data.at(i), data);
-//             ImGui::PopID();
-//         }
-
-//         ImGui::EndTable();
-//     }
-// }
-
-// // clang-format off
-// static void save_project(const char *file_name) {
-//     std::ofstream file;
-//     file.open(file_name, std::ofstream::out);
-//     if (file.is_open() == false) { std::cerr << "File is not opened!"; return; }
+static void save_project(const char *file_name) {
+    std::ofstream file;
+    file.open(file_name, std::ofstream::out);
+    if (file.is_open() == false) { std::cerr << "File is not opened!"; return; }
     
-//     std::stringstream content;
-//     content << "[Functions]\n"; for (const auto &f : functions) { content << f.name << ' ' << f.value << '\n'; }
-//     content << "[Constants]\n"; for (const auto &f : constants) { content << f.name << ' ' << f.value << '\n'; }
-//     content << "[Sliders]\n";   for (const auto &f : sliders)   { content << f.name << ' ' << f.value << ' ' << f.min << ' ' << f.max << '\n'; }
+    std::stringstream content;
+    content << "[Functions]\n"; for (const auto &f : app_state.functions) { content << f.name << ' ' << f.value << '\n'; }
+    content << "[Constants]\n"; for (const auto &f : app_state.constants) { content << f.name << ' ' << f.value << '\n'; }
+    content << "[Sliders]\n";   for (const auto &f : app_state.sliders)   { content << f.name << ' ' << f.value << ' ' << f.min << ' ' << f.max << '\n'; }
 
-//     content << "[Color Settings]\n";
-//     /*Background color*/ for(int i=0; i<4; ++i) {content << background_color[i]; if(i<3)content<<' ';} content << '\n';
+    content << "[Color Settings]\n";
+    /*Background color*/    for(int i=0; i<4; ++i) {content << app_state.color_settings.color_background[i]; if(i<3)content<<' ';} content << '\n';
+    /*Grid color*/          for(int i=0; i<4; ++i) {content << app_state.color_settings.color_grid[i];       if(i<3)content<<' ';} content << '\n';
+    /*Plane color*/         for(int i=0; i<4; ++i) {content << app_state.color_settings.color_plane[i];      if(i<3)content<<' ';} content << '\n';
+    /*Plane Grid color*/    for(int i=0; i<4; ++i) {content << app_state.color_settings.color_plane_grid[i]; if(i<3)content<<' ';} content << '\n';
 
-//     content << "[Rendering Settings]\n";
-//     /*Plane settings*/ content << plane_setttings.bounds << ' ' << plane_setttings.detail;
-
-//     file << content.rdbuf(); file.close();
-// }
-// // clang-format on
-
-// static void load_project(const char *file_name) {
-//     std::ifstream file{file_name};
-//     if (file.is_open() == false) { throw std::runtime_error{"File could not be opened"}; }
-
-//     std::string line;
-//     int resource_id = -1;
-//     functions.clear();
-//     constants.clear();
-//     sliders.clear();
-//     while (std::getline(file, line)) {
-//         if (line.starts_with("[Functions]")) {
-//             resource_id = 0;
-//             continue;
-//         } else if (line.starts_with("[Constants]")) {
-//             resource_id = 1;
-//             continue;
-//         } else if (line.starts_with("[Sliders]")) {
-//             resource_id = 2;
-//             continue;
-//         } else if (line.starts_with("[Color Settings]")) {
-//             resource_id = 3;
-//             continue;
-//         } else if (line.starts_with("[Rendering Settings]")) {
-//             resource_id = 4;
-//             continue;
-//         }
-
-//         if (resource_id == -1 || resource_id > 4) {
-//             throw std::runtime_error{"Error while reading the project file - label not found: "
-//                                      + line};
-//         }
-
-//         std::stringstream ssline{line};
-//         switch (resource_id) {
-//         case 0: {
-//             Function f;
-//             ssline >> f.name >> f.value;
-//             functions.push_back(f);
-//             break;
-//         }
-//         case 1: {
-//             Constant c;
-//             ssline >> c.name >> c.value;
-//             constants.push_back(c);
-//             break;
-//         }
-//         case 2: {
-//             Slider s;
-//             ssline >> s.name >> s.value >> s.min >> s.max;
-//             sliders.push_back(s);
-//             break;
-//         }
-//         case 3: {
-//             ssline >> background_color.x >> background_color.y >> background_color.z
-//                 >> background_color.w;
-//             break;
-//         }
-//         case 4: {
-//             ssline >> plane_setttings.bounds >> plane_setttings.detail;
-//             break;
-//         }
-//         }
-//     }
-// }
+    content << "[Rendering Settings]\n";
+    auto &ps = app_state.plane_settings;
+    /*Plane settings*/ content << ps.bounds << ' ' << ps.detail << ' ' << ps.grid_step << ' ' << ps.grid_line_thickness << ' ' << ps.is_detail_affecting_grid_step;
 
 
+    file << content.rdbuf(); file.close();
+}
+
+static void load_project(const char *file_name) {
+    std::ifstream file{file_name};
+    if (file.is_open() == false) { throw std::runtime_error{"File could not be opened"}; }
+
+    std::string line;
+    int resource_id = -1;
+    app_state.functions.clear();
+    app_state.constants.clear();
+    app_state.sliders.clear();
+    while (std::getline(file, line)) {
+        if      (line.starts_with("[Functions]"))           { resource_id = 0; continue; }
+        else if (line.starts_with("[Constants]"))           { resource_id = 1; continue; }
+        else if (line.starts_with("[Sliders]"))             { resource_id = 2; continue; }
+        else if (line.starts_with("[Color Settings]"))      { resource_id = 3; continue; }
+        else if (line.starts_with("[Rendering Settings]"))  { resource_id = 4; continue; }
+
+        if (resource_id == -1 || resource_id > 4) { throw std::runtime_error{"Error while reading the project file - label not found: " + line}; }
+
+        std::stringstream ssline{line};
+        switch (resource_id) {
+        case 0: {
+            Function f;
+            ssline >> f.name >> f.value;
+            app_state.functions.push_back(f);
+            break;
+        }
+        case 1: {
+            Constant c;
+            ssline >> c.name >> c.value;
+            app_state.constants.push_back(c);
+            break;
+        }
+        case 2: {
+            Slider s;
+            ssline >> s.name >> s.value >> s.min >> s.max;
+            app_state.sliders.push_back(s);
+            break;
+        }
+        case 3: {
+            auto &cs = app_state.color_settings;
+            ssline >> cs.color_background[0] >> cs.color_background[1] >> cs.color_background[2] >> cs.color_background[3]; std::getline(file, line); ssline = std::stringstream{line};    
+            ssline >> cs.color_grid[0] >> cs.color_grid[1] >> cs.color_grid[2] >> cs.color_grid[3];                         std::getline(file, line); ssline = std::stringstream{line};    
+            ssline >> cs.color_plane[0] >> cs.color_plane[1] >> cs.color_plane[2] >> cs.color_plane[3];                     std::getline(file, line); ssline = std::stringstream{line};        
+            ssline >> cs.color_plane_grid[0] >> cs.color_plane_grid[1] >> cs.color_plane_grid[2] >> cs.color_plane_grid[3];
+            break;
+        }
+        case 4: {
+            auto &ps = app_state.plane_settings;
+            ssline >> ps.bounds >> ps.detail >> ps.grid_step >> ps.grid_line_thickness >> ps.is_detail_affecting_grid_step;
+            break;
+        }
+        }
+    }
+}
 
 static void uniform1f(uint32_t program, const char* name, float value) {
     const auto location = glGetUniformLocation(program, name);
     glUniform1f(location, value);
+}
+
+static void uniform3f(uint32_t program, const char* name, glm::vec3 value) {
+    const auto location = glGetUniformLocation(program, name);
+    glUniform3fv(location, 1, &value.x);
 }
 
 static void uniformm4(uint32_t program, const char* name, const glm::mat4& value) {

@@ -28,6 +28,7 @@ namespace g3d {
         explicit Window();
         explicit Window(const char* title, uint32_t width, uint32_t height);
 
+        bool has_just_resized{false};
         GLFWwindow *pglfw_window{nullptr};
         uint32_t width{0}, height{0};
         char title[64];
@@ -44,7 +45,7 @@ namespace g3d {
     struct RenderState {
         HandleVao vao;
         HandleProgram program;
-        uint32_t viewport_width{0}, viewport_heigth{0};
+        float line_width{1.0};
     };
     struct Renderer {
         void render();
