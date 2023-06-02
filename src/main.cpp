@@ -41,24 +41,28 @@ struct AppState {
     std::vector<Function> functions;
     std::vector<Slider> sliders;
     std::vector<Constant> constants;
-
-    struct PlaneSettings {
-        uint32_t detail{3}, bounds{1};
-        float grid_step = 1.0;
-        float grid_line_thickness = 0.9;
-
-        bool is_detail_affecting_grid_step = true;
-
-    } plane_settings;
-
+    
+    std::vector<std::string> logs;
     bool needs_recompilation = false;
 
+    struct PlaneSettings {
+        uint32_t detail{100}, bounds{5};
+        float grid_step = 1.0;
+        float grid_line_thickness = 0.98;
+        bool is_detail_affecting_grid_step  = false;
+    } plane_settings;
+
     struct ColorSettings {
-        glm::vec4 color_background{0.3, 0.4, 0.5, 1.0};
-        glm::vec4 color_grid{0.4, 0.4, 0.4, 1.0};
-        glm::vec4 color_plane{0.3, 0.5, 0.4, 1.0};
-        glm::vec4 color_plane_grid{0.7, 0.5, 0.6, 1.0};
+        glm::vec4 color_background  = glm::vec4{33,  35,  38,  255} / glm::vec4{255};
+        glm::vec4 color_grid        = glm::vec4{94,  94,  94,  255} / glm::vec4{255};
+        glm::vec4 color_plane       = glm::vec4{135, 135, 135, 255} / glm::vec4{255};
+        glm::vec4 color_plane_grid  = glm::vec4{228, 159, 61,  255} / glm::vec4{255};
     } color_settings;
+
+    struct RenderSettings {
+        bool is_grid_rendered               = true;
+        bool is_plane_grid_rendered         = true;
+    } render_settings;
 } app_state;
 
 static void start_application(const char* window_title, uint32_t window_width, uint32_t window_height);
@@ -181,7 +185,7 @@ int main() {
         } catch (std::exception &e) {
             std::string msg = e.what();
             msg = msg.substr(msg.rfind(':')+2, msg.rfind('\"') - msg.rfind(':')-2);
-            std::cerr << msg;
+            app_state.logs.push_back(std::move(msg));
         }
 
         glfwPollEvents();
@@ -194,13 +198,16 @@ int main() {
         auto &bc = app_state.color_settings.color_background;
         glClearColor(bc.r, bc.g, bc.b, bc.a);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-        set_rendering_state_opengl(grid_render_state);
-        uniformm4(program_grid, "v", app_state.camera.view_matrix());
-        uniformm4(program_grid, "p", app_state.camera.projection_matrix());
-        uniform1f(program_grid, "bounds", app_state.plane_settings.bounds);
-        uniform3f(program_grid, "user_color", app_state.color_settings.color_grid);
-        glDrawArraysInstanced(GL_LINES, 0, 2, app_state.plane_settings.bounds * 2 + 1);
-        glDrawArraysInstanced(GL_LINES, 4, 2, app_state.plane_settings.bounds * 2 + 1);
+
+        if (app_state.render_settings.is_grid_rendered) {
+            set_rendering_state_opengl(grid_render_state);
+            uniformm4(program_grid, "v", app_state.camera.view_matrix());
+            uniformm4(program_grid, "p", app_state.camera.projection_matrix());
+            uniform1f(program_grid, "bounds", app_state.plane_settings.bounds);
+            uniform3f(program_grid, "user_color", app_state.color_settings.color_grid);
+            glDrawArraysInstanced(GL_LINES, 0, 2, app_state.plane_settings.bounds * 2 + 1);
+            glDrawArraysInstanced(GL_LINES, 4, 2, app_state.plane_settings.bounds * 2 + 1);
+        }
 
         set_rendering_state_opengl(plane_render_state);
         uniformm4(program_plane, "v", app_state.camera.view_matrix());
@@ -211,6 +218,7 @@ int main() {
         uniform1f(program_plane, "grid_step", app_state.plane_settings.grid_step);
         uniform1f(program_plane, "grid_line_thickness", app_state.plane_settings.grid_line_thickness);
         uniform1f(program_plane, "detail_affects_step", app_state.plane_settings.is_detail_affecting_grid_step ? 1.0f : 0.0f);
+        uniform1f(program_plane, "draw_grid", app_state.render_settings.is_plane_grid_rendered ? 1.0f : 0.0f);
         uniform3f(program_plane, "user_color", app_state.color_settings.color_plane);
         uniform3f(program_plane, "user_grid_color", app_state.color_settings.color_plane_grid);
         for(const auto& s : app_state.sliders) { uniform1f(program_plane, s.name.c_str(), s.value); }
@@ -337,7 +345,13 @@ static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g
             uniform float grid_line_thickness;
 			uniform float detail;
 			uniform float detail_affects_step;
+			uniform float draw_grid;
             void main() { 
+                if (draw_grid == 0.0) {
+                    FRAG_COLOR = vec4(user_color, 1.0);
+                    return;
+                }
+
                 vec2 vp = vfrag_pos;
                 float detail_factor = detail_affects_step==1.0 ? detail : 1.0;
                 float fvpx = fract(vp.x*detail_factor/(grid_step)), fvpy = fract(vp.y*detail_factor/(grid_step));
@@ -466,6 +480,7 @@ static void draw_menu_bar() {
                 ImGui::Indent(spacex - 100.0f);
                 if(ImGui::Button("Save", ImVec2(100.0f, 0.0f))) {
                     std::string file_name_with_ext = file_name + ".3dg";
+                    
                     save_project(file_name_with_ext.c_str()); 
                     ImGui::CloseCurrentPopup();
                 }
@@ -515,6 +530,18 @@ static void draw_left_child() {
                 ImGui::Text("Logs");
                 ImGui::EndMenuBar();
             }
+
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(255, 0, 0, 0));
+            if(ImGui::BeginListBox("##log_list", ImGui::GetContentRegionAvail())) {
+                uint32_t msgidx = 1;
+                for(const auto& l : app_state.logs) {
+                    std::string formatted_msg = std::to_string(msgidx++) + ".\t" + l;
+                    ImGui::Text(formatted_msg.c_str());
+                }
+                ImGui::SetScrollHereY();
+                ImGui::EndListBox();
+            }
+            ImGui::PopStyleColor();
         }
         ImGui::EndChild();
     }
@@ -586,7 +613,7 @@ static void draw_right_child() {
                     ImGui::ColorEdit3("Grid color", &app_state.color_settings.color_grid.x);
                     ImGui::ColorEdit3("Plane grid color", &app_state.color_settings.color_plane_grid.x);
                 }
-                if (ImGui::CollapsingHeader("Rendering Settings")) {
+                if (ImGui::CollapsingHeader("Plane Settings")) {
                     ImGui::PushItemWidth(150.0);
                     ImGui::SliderInt("Plane bounds", (int*)&app_state.plane_settings.bounds, 1, 100);
                     ImGui::SliderInt("Plane detail level", (int*)&app_state.plane_settings.detail, 1, 1000);
@@ -594,6 +621,10 @@ static void draw_right_child() {
                     ImGui::SliderFloat("Plane grid line thickness", &app_state.plane_settings.grid_line_thickness, 0.01f, 1.0f);
                     ImGui::Checkbox("Plane detail affects grid step", &app_state.plane_settings.is_detail_affecting_grid_step);
                     ImGui::PopItemWidth();
+                }
+                if(ImGui::CollapsingHeader("Rendering Settings")) {
+                   ImGui::Checkbox("Grid drawing", &app_state.render_settings.is_grid_rendered);
+                   ImGui::Checkbox("Plane grid drawing", &app_state.render_settings.is_plane_grid_rendered);
                 }
                 break; 
             }
@@ -739,9 +770,13 @@ static void save_project(const char *file_name) {
     /*Plane color*/         for(int i=0; i<4; ++i) {content << app_state.color_settings.color_plane[i];      if(i<3)content<<' ';} content << '\n';
     /*Plane Grid color*/    for(int i=0; i<4; ++i) {content << app_state.color_settings.color_plane_grid[i]; if(i<3)content<<' ';} content << '\n';
 
-    content << "[Rendering Settings]\n";
+    content << "[Plane Settings]\n";
     auto &ps = app_state.plane_settings;
-    /*Plane settings*/ content << ps.bounds << ' ' << ps.detail << ' ' << ps.grid_step << ' ' << ps.grid_line_thickness << ' ' << ps.is_detail_affecting_grid_step;
+    /*Plane settings*/ content << ps.bounds << ' ' << ps.detail << ' ' << ps.grid_step << ' ' << ps.grid_line_thickness << ' ' << ps.is_detail_affecting_grid_step << '\n';
+
+    content << "[Render Settings]\n";
+    auto &rs = app_state.render_settings;
+    content << rs.is_grid_rendered << ' ' << rs.is_plane_grid_rendered;
 
 
     file << content.rdbuf(); file.close();
@@ -761,9 +796,10 @@ static void load_project(const char *file_name) {
         else if (line.starts_with("[Constants]"))           { resource_id = 1; continue; }
         else if (line.starts_with("[Sliders]"))             { resource_id = 2; continue; }
         else if (line.starts_with("[Color Settings]"))      { resource_id = 3; continue; }
-        else if (line.starts_with("[Rendering Settings]"))  { resource_id = 4; continue; }
+        else if (line.starts_with("[Plane Settings]"))      { resource_id = 4; continue; }
+        else if (line.starts_with("[Render Settings]"))     { resource_id = 5; continue; }
 
-        if (resource_id == -1 || resource_id > 4) { throw std::runtime_error{"Error while reading the project file - label not found: " + line}; }
+        if (resource_id == -1 || resource_id > 5) { throw std::runtime_error{"Error while reading the project file - label not found: " + line}; }
 
         std::stringstream ssline{line};
         switch (resource_id) {
@@ -796,6 +832,11 @@ static void load_project(const char *file_name) {
         case 4: {
             auto &ps = app_state.plane_settings;
             ssline >> ps.bounds >> ps.detail >> ps.grid_step >> ps.grid_line_thickness >> ps.is_detail_affecting_grid_step;
+            break;
+        }
+        case 5: {
+            auto &rs = app_state.render_settings;
+            ssline >> rs.is_grid_rendered >> rs.is_plane_grid_rendered;
             break;
         }
         }

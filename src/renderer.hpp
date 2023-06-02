@@ -20,8 +20,6 @@ namespace g3d {
     typedef uint32_t HandleFramebuffer;
     typedef uint32_t HandleShader;
     typedef uint32_t HandleProgram;
-    //typedef uint32_t ;
-    //typedef uint32_t HandleFramebuffer;
 
 /* Definitions */
     struct Window {
@@ -49,7 +47,5 @@ namespace g3d {
     };
     struct Renderer {
         void render();
-
-        private:
     };
 } // namespace g3d
