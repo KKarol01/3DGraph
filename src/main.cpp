@@ -76,6 +76,8 @@ static void resize_main_frambuffer(uint32_t width, uint32_t height);
 static void set_rendering_state_opengl(const g3d::RenderState&);
 static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader);
 static void create_grid_shader_source_and_compile (g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader);
+static void create_compute_shader(g3d::HandleProgram program, g3d::HandleShader &compute_shader);
+static void recalculate_plane_height_field(g3d::HandleProgram program, g3d::HandleBuffer *height_buffer, uint32_t *current_size);
 static void draw_gui();
 
 static void uniform1f(uint32_t program, const char* name, float value);
@@ -92,6 +94,7 @@ int main() {
     g3d::HandleTexture texture_fmain_color;
     g3d::HandleTexture texture_fmain_depth_stencil;
 
+    g3d::HandleProgram program_compute; g3d::HandleShader shader_compute;
     g3d::HandleProgram program_plane;   g3d::HandleShader shader_plane_vert;    g3d::HandleShader shader_plane_frag;
     g3d::HandleProgram program_plane_grid;   g3d::HandleShader shader_plane_grid_vert;    g3d::HandleShader shader_plane_grid_frag;
     g3d::HandleProgram program_line;    g3d::HandleShader shader_line_vert;     g3d::HandleShader shader_line_frag;
@@ -99,9 +102,8 @@ int main() {
 
     g3d::HandleVao vao_plane;
     g3d::HandleVao vao_line;
-    g3d::HandleBuffer vbo_plane, ebo_plane;
+    g3d::HandleBuffer vbo_plane, ebo_plane, vbo_heights_plane;
     g3d::HandleBuffer vbo_line;
-
     glCreateFramebuffers(1, &framebuffer_main);
     glCreateTextures(GL_TEXTURE_2D, 1, &texture_fmain_color);
     glCreateTextures(GL_TEXTURE_2D, 1, &texture_fmain_depth_stencil);
@@ -119,6 +121,7 @@ int main() {
     glCreateVertexArrays(1, &vao_plane);
     glCreateBuffers(1, &vbo_plane);
     glCreateBuffers(1, &ebo_plane);
+    glCreateBuffers(1, &vbo_heights_plane);
     glVertexArrayVertexBuffer(vao_plane, 0, vbo_plane, 0, 8);
     glVertexArrayElementBuffer(vao_plane, ebo_plane);
     glEnableVertexArrayAttrib(vao_plane, 0);
@@ -181,7 +184,7 @@ int main() {
     create_grid_shader_source_and_compile(program_grid, shader_grid_vert, shader_grid_frag);
     while(glfwWindowShouldClose(window.pglfw_window) == false) {
         try {
-            if (app_state.needs_recompilation){ app_state.needs_recompilation = false; create_plane_shader_source_and_compile(program_plane, shader_plane_vert, shader_plane_frag); }            
+            if (app_state.needs_recompilation){ app_state.needs_recompilation = false; create_plane_shader_source_and_compile(program_plane, shader_plane_vert, shader_plane_frag); create_compute_shader(program_compute, shader_compute); }            
         } catch (std::exception &e) {
             std::string msg = e.what();
             msg = msg.substr(msg.rfind(':')+2, msg.rfind('\"') - msg.rfind(':')-2);
@@ -431,6 +434,91 @@ static void create_grid_shader_source_and_compile(g3d::HandleProgram program, g3
     glCompileShader(vertex_shader); glCompileShader(fragment_shader);
     glAttachShader(program, vertex_shader); glAttachShader(program, fragment_shader);
     glLinkProgram(program);
+}
+
+static void create_compute_shader(g3d::HandleProgram program, g3d::HandleShader &compute_shader) {
+    glDetachShader(program, compute_shader);
+    glDeleteShader(compute_shader);
+
+    compute_shader = glCreateShader(GL_COMPUTE_SHADER);
+
+    std::string compute_source = R"glsl(
+        #version 460 core
+        layout(local_size_x=1, local_size_y=1, local_size_z=1) in;
+        layout(std430, binding=0) buffer height_field { float values[]; };
+        uniform float detail;
+        void main() {
+            values[gl_GlobalInvocationID.x + gl_GlobalInvocationID.x*gl_GlobalInvocationID.y] = f(float(gl_GlobalInvocationID.x)/detail, float(gl_GlobalInvocationID.y)/detail);
+        }
+    )glsl";
+
+
+    std::string forward_declarations;
+    std::string function_definitions;
+    std::string uniforms;
+    std::string consts;
+
+    auto& functions = app_state.functions;
+    auto& constants = app_state.constants;
+    auto& sliders   = app_state.sliders;
+
+    for (const auto &f : functions) {
+        forward_declarations += "float " + f.name + "(float,float);\n";
+        function_definitions += "float " + f.name + "(float x,float z){return " + f.value + ";}\n"; }
+    for (const auto &c : constants) { consts += "const float " + c.name + "=" + std::to_string(c.value) + ";\n"; }
+    for (const auto &s : sliders) { uniforms += "uniform float " + s.name + ";\n"; } 
+
+    auto forward_dec_idx = 0u;
+    for (auto new_line_count=0u; new_line_count != 4; ++forward_dec_idx) {
+        if(compute_source.at(forward_dec_idx) == '\n') { ++new_line_count; }
+    }
+    forward_declarations += consts;
+    forward_declarations += uniforms;
+
+    compute_source.insert(compute_source.begin() + forward_dec_idx, forward_declarations.begin(), forward_declarations.end());
+    compute_source += function_definitions;
+    const auto *compute_cstr = compute_source.c_str();
+    glShaderSource(compute_shader, 1, &compute_cstr, 0);
+    glCompileShader(compute_shader);
+
+
+    char* error_log = nullptr;
+    const auto get_shader_compilation_error_message = [&](g3d::HandleShader shader){
+        int compile_status;
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &compile_status);
+
+        if(compile_status != GL_TRUE) {
+            glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &compile_status);
+            error_log = (char*)malloc(compile_status);
+            assert(error_log != nullptr && "Could not allocate memory for shader error log. Possibly the system has no free memory.");
+            glGetShaderInfoLog(shader, compile_status, &compile_status, error_log);
+        }
+    };
+
+    get_shader_compilation_error_message(compute_shader);
+    if(error_log != nullptr) {
+        std::string error_message;
+        error_message += "[SHADER COMPILATION ERROR]: \"";
+        error_message += error_log; error_message += "\"";
+        delete[] error_log;
+        throw std::runtime_error{error_message};
+    }
+
+    glAttachShader(program, compute_shader);
+    glLinkProgram(program);
+}
+static void recalculate_plane_height_field(g3d::HandleProgram program, g3d::HandleBuffer *height_buffer, uint32_t *current_size) {
+    const auto vertex_count = app_state.plane_settings.bounds * app_state.plane_settings.bounds;
+    if(vertex_count > *current_size) {
+        *current_size = vertex_count; 
+        glDeleteBuffers(1, height_buffer);
+        glCreateBuffers(1, height_buffer);
+        glNamedBufferStorage(*height_buffer, vertex_count * sizeof(float), 0, 0);
+    }
+
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, *height_buffer);
+    glUseProgram(program);
+    glDispatchCompute(app_state.plane_settings.bounds, app_state.plane_settings.detail, 1);
 }
 
 static void draw_menu_bar();
