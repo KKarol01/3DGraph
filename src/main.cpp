@@ -184,7 +184,7 @@ int main() {
     create_grid_shader_source_and_compile(program_grid, shader_grid_vert, shader_grid_frag);
     while(glfwWindowShouldClose(window.pglfw_window) == false) {
         try {
-            if (app_state.needs_recompilation){ app_state.needs_recompilation = false; create_plane_shader_source_and_compile(program_plane, shader_plane_vert, shader_plane_frag); create_compute_shader(program_compute, shader_compute); }            
+            if (app_state.needs_recompilation) { app_state.needs_recompilation = false; create_plane_shader_source_and_compile(program_plane, shader_plane_vert, shader_plane_frag); create_compute_shader(program_compute, shader_compute); }            
         } catch (std::exception &e) {
             std::string msg = e.what();
             msg = msg.substr(msg.rfind(':')+2, msg.rfind('\"') - msg.rfind(':')-2);
@@ -447,8 +447,16 @@ static void create_compute_shader(g3d::HandleProgram program, g3d::HandleShader 
         layout(local_size_x=1, local_size_y=1, local_size_z=1) in;
         layout(std430, binding=0) buffer height_field { float values[]; };
         uniform float detail;
+        uniform float bounds;
         void main() {
-            values[gl_GlobalInvocationID.x + gl_GlobalInvocationID.x*gl_GlobalInvocationID.y] = f(float(gl_GlobalInvocationID.x)/detail, float(gl_GlobalInvocationID.y)/detail);
+            uint gx = gl_GlobalInvocationID.x;
+            uint gy = gl_GlobalInvocationID.y;
+
+            vec2 pos = vec2(float(gx), float(gy));
+            pos = pos / detail;
+            pos = pos * 2.0*bounds - bounds; // <-bounds, bounds>
+
+            values[gy*gl_NumWorkGroups.x + x] = f(pos.x, pos.y);
         }
     )glsl";
 
