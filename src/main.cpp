@@ -182,9 +182,14 @@ int main() {
     auto &window = app_state.window;
     create_plane_shader_source_and_compile(program_plane, shader_plane_vert, shader_plane_frag);
     create_grid_shader_source_and_compile(program_grid, shader_grid_vert, shader_grid_frag);
+    create_compute_shader(program_compute, shader_compute);
+    uint32_t current_buffer_size=0;
     while(glfwWindowShouldClose(window.pglfw_window) == false) {
         try {
-            if (app_state.needs_recompilation) { app_state.needs_recompilation = false; create_plane_shader_source_and_compile(program_plane, shader_plane_vert, shader_plane_frag); create_compute_shader(program_compute, shader_compute); }            
+            if (app_state.needs_recompilation) { 
+                app_state.needs_recompilation = false;
+                create_compute_shader(program_compute, shader_compute);
+            }            
         } catch (std::exception &e) {
             std::string msg = e.what();
             msg = msg.substr(msg.rfind(':')+2, msg.rfind('\"') - msg.rfind(':')-2);
@@ -225,6 +230,8 @@ int main() {
         uniform3f(program_plane, "user_color", app_state.color_settings.color_plane);
         uniform3f(program_plane, "user_grid_color", app_state.color_settings.color_plane_grid);
         for(const auto& s : app_state.sliders) { uniform1f(program_plane, s.name.c_str(), s.value); }
+        recalculate_plane_height_field(program_compute, &vbo_heights_plane, &current_buffer_size); 
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
         glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, app_state.plane_settings.detail * app_state.plane_settings.detail);
         
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -295,49 +302,33 @@ static void set_rendering_state_opengl(const g3d::RenderState& state) {
     glLineWidth(state.line_width);
 }
 static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g3d::HandleShader& vertex_shader, g3d::HandleShader& fragment_shader) {
-    std::string forward_declarations;
-    std::string function_definitions;
-    std::string uniforms;
-    std::string consts;
-
-    auto& functions = app_state.functions;
-    auto& constants = app_state.constants;
-    auto& sliders   = app_state.sliders;
-
-    for (const auto &f : functions) {
-        forward_declarations += "float " + f.name + "(float,float);\n";
-        function_definitions += "float " + f.name + "(float x,float z){return " + f.value + ";}\n"; }
-    for (const auto &c : constants) { consts += "const float " + c.name + "=" + std::to_string(c.value) + ";\n"; }
-    for (const auto &s : sliders) { uniforms += "uniform float " + s.name + ";\n"; }
 
     std::string shader_source;
-    shader_source += "#version 460 core\n"
-                     "layout(location=0) in vec2 in_pos;\n"
-                     "uniform mat4 p;\n"
-                     "uniform mat4 v;\n"
-                     "uniform float TIME;\n"
-                     "uniform float detail;\n"
-                     "uniform float size;\n";
-    shader_source += uniforms;
-    shader_source += forward_declarations;
-    shader_source += consts;
-    shader_source += R"glsl(
-        
-        out vec2 vfrag_pos;
-        void main() {
-            vec2 ip = in_pos*0.5+0.5;
-            float inv_detail = 2.0*size/detail;
-            ip = ip * inv_detail - size;
-            ip.x += float(gl_InstanceID % uint(detail)) * inv_detail;
-            ip.y += float(gl_InstanceID / uint(detail)) * inv_detail;
-            float x = ip.x;
-            float y = ip.y;
-            vfrag_pos = vec2(x, y);
-            gl_Position = p * v * vec4(x, f(x,y), y, 1.0);}
-        
-        )glsl";
-        shader_source += function_definitions;
+    shader_source = R"glsl(
+        #version 460 core
+        layout(location=0) in vec2 in_pos;
+        layout(std430, binding=0) buffer HeightField {
+            float values[];
+        };
+        uniform mat4 p;
+        uniform mat4 v;
+        uniform float TIME;
+        uniform float detail;
+        uniform float size;
 
+        void main() {
+            uint gx = gl_InstanceID % uint(detail+1);
+            uint gy = gl_InstanceID / uint(detail+1);
+            uint gidx = gy * uint(detail+1) + gx;
+            float height = values[gidx];
+            vec2 vpos = in_pos * 0.5 + 0.5;
+            vpos /= detail+1;
+            vpos = vpos - size;
+            vpos.x += (2.0*size)/detail * gx;
+            vpos.y += (2.0*size)/detail * gy;
+            gl_Position = p * v * vec4(vpos.x, height, vpos.y, 1.0);
+        }
+    )glsl";
         std::string frag_src = R"glsl(
             #version 460 core
             out vec4 FRAG_COLOR;
@@ -456,7 +447,7 @@ static void create_compute_shader(g3d::HandleProgram program, g3d::HandleShader 
             pos = pos / detail;
             pos = pos * 2.0*bounds - bounds; // <-bounds, bounds>
 
-            values[gy*gl_NumWorkGroups.x + x] = f(pos.x, pos.y);
+            values[gy*gl_NumWorkGroups.x + gx] = f(pos.x, pos.y);
         }
     )glsl";
 
