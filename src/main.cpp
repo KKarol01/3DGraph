@@ -46,7 +46,7 @@ struct AppState {
     bool needs_recompilation = false;
 
     struct PlaneSettings {
-        uint32_t detail{100}, bounds{5};
+        uint32_t detail{1}, bounds{1};
         float grid_step = 1.0;
         float grid_line_thickness = 0.98;
         bool is_detail_affecting_grid_step  = false;
@@ -100,6 +100,7 @@ int main() {
     g3d::HandleProgram program_line;    g3d::HandleShader shader_line_vert;     g3d::HandleShader shader_line_frag;
     g3d::HandleProgram program_grid;    g3d::HandleShader shader_grid_vert;     g3d::HandleShader shader_grid_frag;
 
+    program_compute = glCreateProgram();
     g3d::HandleVao vao_plane;
     g3d::HandleVao vao_line;
     g3d::HandleBuffer vbo_plane, ebo_plane, vbo_heights_plane;
@@ -185,17 +186,6 @@ int main() {
     create_compute_shader(program_compute, shader_compute);
     uint32_t current_buffer_size=0;
     while(glfwWindowShouldClose(window.pglfw_window) == false) {
-        try {
-            if (app_state.needs_recompilation) { 
-                app_state.needs_recompilation = false;
-                create_compute_shader(program_compute, shader_compute);
-            }            
-        } catch (std::exception &e) {
-            std::string msg = e.what();
-            msg = msg.substr(msg.rfind(':')+2, msg.rfind('\"') - msg.rfind(':')-2);
-            app_state.logs.push_back(std::move(msg));
-        }
-
         glfwPollEvents();
         imgui_newframe();
         app_state.camera.update();
@@ -207,31 +197,18 @@ int main() {
         glClearColor(bc.r, bc.g, bc.b, bc.a);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
-        if (app_state.render_settings.is_grid_rendered) {
-            set_rendering_state_opengl(grid_render_state);
-            uniformm4(program_grid, "v", app_state.camera.view_matrix());
-            uniformm4(program_grid, "p", app_state.camera.projection_matrix());
-            uniform1f(program_grid, "bounds", app_state.plane_settings.bounds);
-            uniform3f(program_grid, "user_color", app_state.color_settings.color_grid);
-            glDrawArraysInstanced(GL_LINES, 0, 2, app_state.plane_settings.bounds * 2 + 1);
-            glDrawArraysInstanced(GL_LINES, 4, 2, app_state.plane_settings.bounds * 2 + 1);
-        }
-
+        glUseProgram(program_compute);
+        uniform1f(program_compute, "detail", app_state.plane_settings.detail);
+        uniform1f(program_compute, "bounds", app_state.plane_settings.bounds);
+        uniform1f(program_plane, "TIME", (float)glfwGetTime());
+        for(const auto& s : app_state.sliders) { uniform1f(program_plane, s.name.c_str(), s.value); }
+        recalculate_plane_height_field(program_compute, &vbo_heights_plane, &current_buffer_size); 
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
         set_rendering_state_opengl(plane_render_state);
         uniformm4(program_plane, "v", app_state.camera.view_matrix());
         uniformm4(program_plane, "p", app_state.camera.projection_matrix());
         uniform1f(program_plane, "detail", app_state.plane_settings.detail);
         uniform1f(program_plane, "size", app_state.plane_settings.bounds);
-        uniform1f(program_plane, "TIME", (float)glfwGetTime());
-        uniform1f(program_plane, "grid_step", app_state.plane_settings.grid_step);
-        uniform1f(program_plane, "grid_line_thickness", app_state.plane_settings.grid_line_thickness);
-        uniform1f(program_plane, "detail_affects_step", app_state.plane_settings.is_detail_affecting_grid_step ? 1.0f : 0.0f);
-        uniform1f(program_plane, "draw_grid", app_state.render_settings.is_plane_grid_rendered ? 1.0f : 0.0f);
-        uniform3f(program_plane, "user_color", app_state.color_settings.color_plane);
-        uniform3f(program_plane, "user_grid_color", app_state.color_settings.color_plane_grid);
-        for(const auto& s : app_state.sliders) { uniform1f(program_plane, s.name.c_str(), s.value); }
-        recalculate_plane_height_field(program_compute, &vbo_heights_plane, &current_buffer_size); 
-        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
         glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, app_state.plane_settings.detail * app_state.plane_settings.detail);
         
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -317,15 +294,17 @@ static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g
         uniform float size;
 
         void main() {
-            uint gx = gl_InstanceID % uint(detail+1);
-            uint gy = gl_InstanceID / uint(detail+1);
+            uint gx = (gl_InstanceID+uint(in_pos.x)) % uint(detail+1);
+            uint gy = (gl_InstanceID+uint(in_pos.y)) / uint(detail+1);
             uint gidx = gy * uint(detail+1) + gx;
             float height = values[gidx];
             vec2 vpos = in_pos * 0.5 + 0.5;
-            vpos /= detail+1;
+            vpos = vpos / (detail+1.0);
             vpos = vpos - size;
-            vpos.x += (2.0*size)/detail * gx;
-            vpos.y += (2.0*size)/detail * gy;
+            //vpos.x += (2.0*size)/detail * float(gx);
+            //vpos.y += (2.0*size)/detail * float(gy);
+            //vpos.x += float(gx);
+            //vpos.y += float(gy);
             gl_Position = p * v * vec4(vpos.x, height, vpos.y, 1.0);
         }
     )glsl";
@@ -341,19 +320,20 @@ static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g
 			uniform float detail_affects_step;
 			uniform float draw_grid;
             void main() { 
-                if (draw_grid == 0.0) {
-                    FRAG_COLOR = vec4(user_color, 1.0);
-                    return;
-                }
+                // if (draw_grid == 0.0) {
+                //     FRAG_COLOR = vec4(user_color, 1.0);
+                //     return;
+                // }
 
-                vec2 vp = vfrag_pos;
-                float detail_factor = detail_affects_step==1.0 ? detail : 1.0;
-                float fvpx = fract(vp.x*detail_factor/(grid_step)), fvpy = fract(vp.y*detail_factor/(grid_step));
-                float a = (1.0 - grid_line_thickness), b = grid_line_thickness;
-                float in_ab_range = (fvpx<a || fvpx>b || fvpy<a || fvpy>b) ? 1.0 : 0.0;
+                // vec2 vp = vfrag_pos;
+                // float detail_factor = detail_affects_step==1.0 ? detail : 1.0;
+                // float fvpx = fract(vp.x*detail_factor/(grid_step)), fvpy = fract(vp.y*detail_factor/(grid_step));
+                // float a = (1.0 - grid_line_thickness), b = grid_line_thickness;
+                // float in_ab_range = (fvpx<a || fvpx>b || fvpy<a || fvpy>b) ? 1.0 : 0.0;
                 
-                vec3 color = mix(user_color, user_grid_color, in_ab_range);
-                FRAG_COLOR = vec4(color, 1.0); 
+                // vec3 color = mix(user_color, user_grid_color, in_ab_range);
+                // FRAG_COLOR = vec4(color, 1.0); 
+                FRAG_COLOR = vec4(1.0);
             }
         
         )glsl";
@@ -435,19 +415,21 @@ static void create_compute_shader(g3d::HandleProgram program, g3d::HandleShader 
 
     std::string compute_source = R"glsl(
         #version 460 core
-        layout(local_size_x=1, local_size_y=1, local_size_z=1) in;
+        layout(local_size_x=32, local_size_y=32, local_size_z=1) in;
         layout(std430, binding=0) buffer height_field { float values[]; };
         uniform float detail;
         uniform float bounds;
         void main() {
+            uint vx_in_row = uint(detail)+1;
             uint gx = gl_GlobalInvocationID.x;
             uint gy = gl_GlobalInvocationID.y;
-
+            if (gx >= vx_in_row || gy >= vx_in_row) {return;}
+            uint idx = gy*vx_in_row + gx;
             vec2 pos = vec2(float(gx), float(gy));
             pos = pos / detail;
             pos = pos * 2.0*bounds - bounds; // <-bounds, bounds>
 
-            values[gy*gl_NumWorkGroups.x + gx] = f(pos.x, pos.y);
+            values[gy*vx_in_row + gx] = f(pos.x, pos.y);
         }
     )glsl";
 
@@ -507,7 +489,7 @@ static void create_compute_shader(g3d::HandleProgram program, g3d::HandleShader 
     glLinkProgram(program);
 }
 static void recalculate_plane_height_field(g3d::HandleProgram program, g3d::HandleBuffer *height_buffer, uint32_t *current_size) {
-    const auto vertex_count = app_state.plane_settings.bounds * app_state.plane_settings.bounds;
+    const auto vertex_count = (unsigned)glm::pow(app_state.plane_settings.detail+1, 2);
     if(vertex_count > *current_size) {
         *current_size = vertex_count; 
         glDeleteBuffers(1, height_buffer);
@@ -516,8 +498,10 @@ static void recalculate_plane_height_field(g3d::HandleProgram program, g3d::Hand
     }
 
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, *height_buffer);
-    glUseProgram(program);
-    glDispatchCompute(app_state.plane_settings.bounds, app_state.plane_settings.detail, 1);
+    //glUseProgram(program);
+    const float compute_num = (float)(app_state.plane_settings.bounds+1) / 32.0f;
+    const uint32_t compute_num_uint = glm::ceil(compute_num);
+    glDispatchCompute(compute_num_uint, compute_num_uint, 1);
 }
 
 static void draw_menu_bar();
