@@ -190,12 +190,27 @@ int main() {
         imgui_newframe();
         app_state.camera.update();
 
+        if(app_state.needs_recompilation) {
+            app_state.needs_recompilation = false;
+            create_compute_shader(program_compute, shader_compute);
+        }
+
         glEnable(GL_DEPTH_TEST);
         glBindFramebuffer(GL_FRAMEBUFFER, app_state.framebuffer_main.handle);
         glViewport(0, 0, app_state.framebuffer_main.textures[0].second->width, app_state.framebuffer_main.textures[0].second->height);
         auto &bc = app_state.color_settings.color_background;
         glClearColor(bc.r, bc.g, bc.b, bc.a);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+        if (app_state.render_settings.is_grid_rendered) {
+            set_rendering_state_opengl(grid_render_state);
+            uniformm4(program_grid, "v", app_state.camera.view_matrix());
+            uniformm4(program_grid, "p", app_state.camera.projection_matrix());
+            uniform1f(program_grid, "bounds", app_state.plane_settings.bounds);
+            uniform3f(program_grid, "user_color", app_state.color_settings.color_grid);
+            glDrawArraysInstanced(GL_LINES, 0, 2, app_state.plane_settings.bounds * 2 + 1);
+            glDrawArraysInstanced(GL_LINES, 4, 2, app_state.plane_settings.bounds * 2 + 1);
+        }
 
         glUseProgram(program_compute);
         uniform1f(program_compute, "detail", app_state.plane_settings.detail);
@@ -294,17 +309,15 @@ static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g
         uniform float size;
 
         void main() {
-            uint gx = (gl_InstanceID+uint(in_pos.x)) % uint(detail+1);
-            uint gy = (gl_InstanceID+uint(in_pos.y)) / uint(detail+1);
-            uint gidx = gy * uint(detail+1) + gx;
+            uint gx = (gl_InstanceID) % uint(detail);
+            uint gy = (gl_InstanceID) / uint(detail);
+            uint gidx = (gy+uint(in_pos.y)) * uint(detail+1) + (gx+uint(in_pos.x));
             float height = values[gidx];
             vec2 vpos = in_pos * 0.5 + 0.5;
-            vpos = vpos / (detail+1.0);
+            vpos = vpos * (2.0*size / detail);
             vpos = vpos - size;
-            //vpos.x += (2.0*size)/detail * float(gx);
-            //vpos.y += (2.0*size)/detail * float(gy);
-            //vpos.x += float(gx);
-            //vpos.y += float(gy);
+            vpos.x += (2.0*size)/detail * float(gx);
+            vpos.y += (2.0*size)/detail * float(gy);
             gl_Position = p * v * vec4(vpos.x, height, vpos.y, 1.0);
         }
     )glsl";
@@ -499,7 +512,7 @@ static void recalculate_plane_height_field(g3d::HandleProgram program, g3d::Hand
 
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, *height_buffer);
     //glUseProgram(program);
-    const float compute_num = (float)(app_state.plane_settings.bounds+1) / 32.0f;
+    const float compute_num = (float)(app_state.plane_settings.detail+1) / 32.0f;
     const uint32_t compute_num_uint = glm::ceil(compute_num);
     glDispatchCompute(compute_num_uint, compute_num_uint, 1);
 }
