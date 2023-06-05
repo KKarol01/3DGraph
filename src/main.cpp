@@ -75,6 +75,7 @@ static void imgui_renderframe();
 static void resize_main_frambuffer(uint32_t width, uint32_t height);
 static void set_rendering_state_opengl(const g3d::RenderState&);
 static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader);
+static void create_plane_grid_source_and_compiler(g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader);
 static void create_grid_shader_source_and_compile (g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader);
 static void create_compute_shader(g3d::HandleProgram program, g3d::HandleShader &compute_shader);
 static void recalculate_plane_height_field(g3d::HandleProgram program, g3d::HandleBuffer *height_buffer, uint32_t *current_size);
@@ -181,8 +182,10 @@ int main() {
     };
 
     auto &window = app_state.window;
+    
     create_plane_shader_source_and_compile(program_plane, shader_plane_vert, shader_plane_frag);
     create_grid_shader_source_and_compile(program_grid, shader_grid_vert, shader_grid_frag);
+    create_plane_grid_source_and_compiler(program_plane_grid, shader_plane_grid_vert, shader_plane_grid_frag);
     create_compute_shader(program_compute, shader_compute);
     uint32_t current_buffer_size=0;
     while(glfwWindowShouldClose(window.pglfw_window) == false) {
@@ -192,7 +195,11 @@ int main() {
 
         if(app_state.needs_recompilation) {
             app_state.needs_recompilation = false;
-            create_compute_shader(program_compute, shader_compute);
+            try {
+                create_compute_shader(program_compute, shader_compute);
+            } catch(const std::exception& err) {
+                std::cerr << err.what();
+            }
         }
 
         glEnable(GL_DEPTH_TEST);
@@ -215,7 +222,7 @@ int main() {
         glUseProgram(program_compute);
         uniform1f(program_compute, "detail", app_state.plane_settings.detail);
         uniform1f(program_compute, "bounds", app_state.plane_settings.bounds);
-        uniform1f(program_plane, "TIME", (float)glfwGetTime());
+        uniform1f(program_compute, "TIME", (float)glfwGetTime());
         for(const auto& s : app_state.sliders) { uniform1f(program_plane, s.name.c_str(), s.value); }
         recalculate_plane_height_field(program_compute, &vbo_heights_plane, &current_buffer_size); 
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
@@ -224,12 +231,27 @@ int main() {
         uniformm4(program_plane, "p", app_state.camera.projection_matrix());
         uniform1f(program_plane, "detail", app_state.plane_settings.detail);
         uniform1f(program_plane, "size", app_state.plane_settings.bounds);
+        uniform3f(program_plane, "user_color", app_state.color_settings.color_plane);
         glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, app_state.plane_settings.detail * app_state.plane_settings.detail);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        glEnable(GL_POLYGON_OFFSET_LINE);
+        static float a{1.0f}, b{1.0f};
+        glPolygonOffset(a, b);
+        uniform3f(program_plane, "user_color", app_state.color_settings.color_plane_grid);
+        glLineWidth(1.2);
+        glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, app_state.plane_settings.detail * app_state.plane_settings.detail);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glLineWidth(1.0);
+        glDisable(GL_POLYGON_OFFSET_LINE);
         
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, app_state.window.width, app_state.window.height);
         glClear(GL_COLOR_BUFFER_BIT);
         draw_gui();
+        ImGui::Begin("a");
+        ImGui::SliderFloat("factor", &a, -10.0f, 10.0f);
+        ImGui::SliderFloat("units", &b, -10.0f, 10.0f);
+        ImGui::End();
 
         imgui_renderframe();
         glfwSwapBuffers(window.pglfw_window);   
@@ -346,7 +368,7 @@ static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g
                 
                 // vec3 color = mix(user_color, user_grid_color, in_ab_range);
                 // FRAG_COLOR = vec4(color, 1.0); 
-                FRAG_COLOR = vec4(1.0);
+                FRAG_COLOR = vec4(user_color, 1.0);
             }
         
         )glsl";
@@ -390,7 +412,48 @@ static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g
     vertex_shader   = new_vertex_shader; 
     fragment_shader = new_fragment_shader;
 }
+static void create_plane_grid_source_and_compiler(g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader) {
+        const char *vertex_source = R"glsl(
+        #version 460 core
+        layout(location=0) in vec3 pos;
+        layout(std430, binding=0) buffer Heights {float values[]; };
+        uniform mat4 m;
+        uniform mat4 v;
+        uniform mat4 p;
+        uniform float bounds;
+        uniform float detail;
+        uniform float drawing_in_x_dir;
 
+        void main() {
+            // uint xidx, yidx;
+            // vec3 vpos = pos*0.5+0.5;
+
+        
+            //     xidx = (gl_InstanceID % uint(detail)) + vpos.x;
+            //     yidx = (gl_InstanceID / uint(detail));
+        
+
+            // vpos = vpos / (detail+1);
+            // float height =  values[yidx * (detail+1) + xidx];
+            // vec3 offset = vec3(1.0, 0.0, 0.0) * (-bounds + float(yidx)/(detail));
+
+            // vec3 calc_pos = pos + offset;
+            // calc_pos.y = 0.0f;
+            gl_Position = p * v * vec4(pos, 1.0);
+        }
+    )glsl";
+    const char *fragment_source = R"glsl(
+        #version 460 core
+        out vec4 FRAG_COLOR;
+        uniform vec3 user_color;
+        void main() { FRAG_COLOR = vec4(user_color, 1.0); }
+    )glsl";
+
+    glShaderSource(vertex_shader, 1, &vertex_source, 0); glShaderSource(fragment_shader, 1, &fragment_source, 0);
+    glCompileShader(vertex_shader); glCompileShader(fragment_shader);
+    glAttachShader(program, vertex_shader); glAttachShader(program, fragment_shader);
+    glLinkProgram(program);
+}
 static void create_grid_shader_source_and_compile(g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader) {
     const char *vertex_source = R"glsl(
         #version 460 core
@@ -432,6 +495,7 @@ static void create_compute_shader(g3d::HandleProgram program, g3d::HandleShader 
         layout(std430, binding=0) buffer height_field { float values[]; };
         uniform float detail;
         uniform float bounds;
+        uniform float TIME;
         void main() {
             uint vx_in_row = uint(detail)+1;
             uint gx = gl_GlobalInvocationID.x;
@@ -703,7 +767,7 @@ static void draw_right_child() {
                     ImGui::SliderInt("Plane detail level", (int*)&app_state.plane_settings.detail, 1, 1000);
                     ImGui::SliderFloat("Plane grid step", &app_state.plane_settings.grid_step, 1.0f, 100.0f);
                     ImGui::SliderFloat("Plane grid line thickness", &app_state.plane_settings.grid_line_thickness, 0.01f, 1.0f);
-                    ImGui::Checkbox("Plane detail affects grid step", &app_state.plane_settings.is_detail_affecting_grid_step);
+                    // ImGui::Checkbox("Plane detail affects grid step", &app_state.plane_settings.is_detail_affecting_grid_step);
                     ImGui::PopItemWidth();
                 }
                 if(ImGui::CollapsingHeader("Rendering Settings")) {
