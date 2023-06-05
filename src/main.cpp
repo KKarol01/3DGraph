@@ -46,7 +46,7 @@ struct AppState {
     bool needs_recompilation = false;
 
     struct PlaneSettings {
-        uint32_t detail{1}, bounds{1};
+        uint32_t detail{3}, bounds{1};
         float grid_step = 1.0;
         float grid_line_thickness = 0.98;
         bool is_detail_affecting_grid_step  = false;
@@ -233,26 +233,34 @@ int main() {
         uniform1f(program_plane, "size", app_state.plane_settings.bounds);
         uniform3f(program_plane, "user_color", app_state.color_settings.color_plane);
         glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, app_state.plane_settings.detail * app_state.plane_settings.detail);
-        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        set_rendering_state_opengl(plane_grid_render_state);
+        uniformm4(program_plane_grid, "v", app_state.camera.view_matrix());
+        uniformm4(program_plane_grid, "p", app_state.camera.projection_matrix());
+        uniform1f(program_plane_grid, "detail", app_state.plane_settings.detail);
+        uniform1f(program_plane_grid, "bounds", app_state.plane_settings.bounds);
+        uniform3f(program_plane_grid, "user_color", app_state.color_settings.color_plane_grid);
+
         glEnable(GL_POLYGON_OFFSET_LINE);
-        static float a{1.0f}, b{1.0f};
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        static float a=1.f, b=1.f;
         glPolygonOffset(a, b);
-        uniform3f(program_plane, "user_color", app_state.color_settings.color_plane_grid);
         glLineWidth(1.2);
-        glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, app_state.plane_settings.detail * app_state.plane_settings.detail);
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        
+        glDrawArraysInstanced(GL_LINES, 0, 2, glm::max(2u, app_state.plane_settings.detail * app_state.plane_settings.detail));
+        
         glLineWidth(1.0);
         glDisable(GL_POLYGON_OFFSET_LINE);
-        
+        glDisable(GL_POLYGON_OFFSET_FILL);
+
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, app_state.window.width, app_state.window.height);
         glClear(GL_COLOR_BUFFER_BIT);
         draw_gui();
         ImGui::Begin("a");
-        ImGui::SliderFloat("factor", &a, -10.0f, 10.0f);
-        ImGui::SliderFloat("units", &b, -10.0f, 10.0f);
+        ImGui::SliderFloat("a", &a, -10.0f, 10.0f);
+        ImGui::SliderFloat("b", &b, -10.0f, 10.0f);
         ImGui::End();
-
+        
         imgui_renderframe();
         glfwSwapBuffers(window.pglfw_window);   
         window.has_just_resized = false;
@@ -417,30 +425,30 @@ static void create_plane_grid_source_and_compiler(g3d::HandleProgram program, g3
         #version 460 core
         layout(location=0) in vec3 pos;
         layout(std430, binding=0) buffer Heights {float values[]; };
-        uniform mat4 m;
-        uniform mat4 v;
-        uniform mat4 p;
+
         uniform float bounds;
         uniform float detail;
-        uniform float drawing_in_x_dir;
+        uniform mat4 v;
+        uniform mat4 p;
 
         void main() {
-            // uint xidx, yidx;
-            // vec3 vpos = pos*0.5+0.5;
+            uint xidx, yidx;
+            vec3 vpos = pos;
+			float vc = detail+1.0;
+			vpos.x = vpos.x*0.5+0.5;
+			vpos.x *= 2.0*bounds / detail;
+			vpos.xz -= bounds;
 
-        
-            //     xidx = (gl_InstanceID % uint(detail)) + vpos.x;
-            //     yidx = (gl_InstanceID / uint(detail));
-        
-
-            // vpos = vpos / (detail+1);
-            // float height =  values[yidx * (detail+1) + xidx];
-            // vec3 offset = vec3(1.0, 0.0, 0.0) * (-bounds + float(yidx)/(detail));
-
-            // vec3 calc_pos = pos + offset;
-            // calc_pos.y = 0.0f;
-            gl_Position = p * v * vec4(pos, 1.0);
+            xidx = (gl_InstanceID % uint(detail)) + uint(pos.x*0.5+0.5);
+            yidx = (gl_InstanceID / uint(detail));
+			
+			vpos.x += float((gl_InstanceID % uint(detail))) * ( 2.0*bounds/detail );
+			vpos.z += float(yidx) * (2.0*bounds/(max(1.0,detail-1.0)));
+            float height =  values[yidx*uint(vc) + xidx];
+			vpos.y = height;
+            gl_Position = p * v * vec4(vpos, 1.0);
         }
+    
     )glsl";
     const char *fragment_source = R"glsl(
         #version 460 core
@@ -451,6 +459,29 @@ static void create_plane_grid_source_and_compiler(g3d::HandleProgram program, g3
 
     glShaderSource(vertex_shader, 1, &vertex_source, 0); glShaderSource(fragment_shader, 1, &fragment_source, 0);
     glCompileShader(vertex_shader); glCompileShader(fragment_shader);
+
+    char* error_log = nullptr;
+    const auto get_shader_compilation_error_message = [&](g3d::HandleShader shader){
+        int compile_status;
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &compile_status);
+
+        if(compile_status != GL_TRUE) {
+            glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &compile_status);
+            error_log = (char*)malloc(compile_status);
+            assert(error_log != nullptr && "Could not allocate memory for shader error log. Possibly the system has no free memory.");
+            glGetShaderInfoLog(shader, compile_status, &compile_status, error_log);
+        }
+    };
+
+    get_shader_compilation_error_message(vertex_shader);
+    if(error_log != nullptr) {
+        std::string error_message;
+        error_message += "[SHADER COMPILATION ERROR]: \"";
+        error_message += error_log; error_message += "\"";
+        delete[] error_log;
+        throw std::runtime_error{error_message};
+    }
+
     glAttachShader(program, vertex_shader); glAttachShader(program, fragment_shader);
     glLinkProgram(program);
 }
