@@ -49,7 +49,7 @@ struct AppState {
         uint32_t detail{3}, bounds{1};
         float grid_step = 1.0;
         float grid_line_thickness = 0.98;
-        bool is_detail_affecting_grid_step  = false;
+        bool is_detail_affecting_grid_step  = true;
     } plane_settings;
 
     struct ColorSettings {
@@ -241,6 +241,7 @@ int main() {
         uniform3f(program_plane_grid, "user_color", app_state.color_settings.color_plane_grid);
         uniform1f(program_plane_grid, "should_override_detail", app_state.plane_settings.is_detail_affecting_grid_step ? 0.0 : 1.0);
         uniform1f(program_plane_grid, "override_detail_value", 1.0/(app_state.plane_settings.bounds*2.0));
+        uniform3f(program_plane_grid, "cam_pos", glm::vec3{app_state.camera.view_matrix() * glm::vec4{0,0,0,1}});
 
         glEnable(GL_POLYGON_OFFSET_LINE);
         glPolygonOffset(1.0f, 1.0f);
@@ -248,7 +249,7 @@ int main() {
         if(app_state.plane_settings.is_detail_affecting_grid_step == 1.0) {
             glDrawArraysInstanced(GL_LINES, 0, 2, glm::max(2u, app_state.plane_settings.detail * app_state.plane_settings.detail));
         } else {
-            glDrawArraysInstanced(GL_LINES, 0, 2, glm::max(2u, app_state.plane_settings.detail * app_state.plane_settings.bounds*2u+1));
+            glDrawArraysInstanced(GL_LINES, 0, 2, glm::max(2u, app_state.plane_settings.detail * (app_state.plane_settings.bounds*2u+1)));
         }
         glLineWidth(1.0);
         glDisable(GL_POLYGON_OFFSET_LINE);
@@ -425,8 +426,6 @@ static void create_plane_grid_source_and_compiler(g3d::HandleProgram program, g3
 
         uniform float bounds;
         uniform float detail;
-        uniform float should_override_detail;
-        uniform float override_detail_value;
         uniform mat4 v;
         uniform mat4 p;
 
@@ -440,18 +439,20 @@ static void create_plane_grid_source_and_compiler(g3d::HandleProgram program, g3
 
             xidx = (gl_InstanceID % uint(detail)) + uint(pos.x*0.5+0.5);
             yidx = (gl_InstanceID / uint(detail));
-
-            if(should_override_detail == 1.0) {
-                yidx *= uint((detail+1)/(2.0*bounds));
-            }
 			
 			vpos.x += float((gl_InstanceID % uint(detail))) * ( 2.0*bounds/detail );
             float z_step = (2.0*bounds/(max(1.0,detail-1.0)));
-            //if(should_override_detail == 1.0) { z_step = 1.0/(2.0*bounds); }
 			vpos.z += float(yidx) * z_step;
-            float height =  values[yidx*uint(vc) + xidx];
+            float height = 0.0;
+			height =  values[yidx*uint(vc) + xidx];
+		
 			vpos.y = height;
-            gl_Position = p * v * vec4(vpos, 1.0);
+
+            vec4 vvpos = v * vec4(vpos, 1.0);
+            if(dot(vvpos.xyz, vvpos.xyz) > 1.0)
+            vvpos.xyz += -normalize(vvpos.xyz) * 0.25;
+            
+            gl_Position = p * vec4(vvpos.xyz, 1.0);
         }
     
     )glsl";
