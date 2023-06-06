@@ -241,25 +241,16 @@ int main() {
         uniform3f(program_plane_grid, "user_color", app_state.color_settings.color_plane_grid);
 
         glEnable(GL_POLYGON_OFFSET_LINE);
-        glEnable(GL_POLYGON_OFFSET_FILL);
-        static float a=1.f, b=1.f;
-        glPolygonOffset(a, b);
-        glLineWidth(1.2);
-        
+        glPolygonOffset(1.0f, 1.0f);
+        glLineWidth(1.5);
         glDrawArraysInstanced(GL_LINES, 0, 2, glm::max(2u, app_state.plane_settings.detail * app_state.plane_settings.detail));
-        
         glLineWidth(1.0);
         glDisable(GL_POLYGON_OFFSET_LINE);
-        glDisable(GL_POLYGON_OFFSET_FILL);
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, app_state.window.width, app_state.window.height);
         glClear(GL_COLOR_BUFFER_BIT);
         draw_gui();
-        ImGui::Begin("a");
-        ImGui::SliderFloat("a", &a, -10.0f, 10.0f);
-        ImGui::SliderFloat("b", &b, -10.0f, 10.0f);
-        ImGui::End();
         
         imgui_renderframe();
         glfwSwapBuffers(window.pglfw_window);   
