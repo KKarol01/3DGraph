@@ -44,6 +44,7 @@ struct AppState {
     
     std::vector<std::string> logs;
     bool needs_recompilation = false;
+    uint32_t* heights_buffer=nullptr;
 
     struct PlaneSettings {
         uint32_t detail{3}, bounds{1};
@@ -87,6 +88,7 @@ static void uniformm4(uint32_t program, const char* name, const glm::mat4& value
 
 static void save_project(const char *file_name);
 static void load_project(const char *file_name);
+static void export_to_obj(const std::string& file_name, g3d::HandleBuffer buffer);
 
 int main() {
     start_application("3DCalc", 1280, 960);
@@ -115,6 +117,7 @@ int main() {
     glNamedFramebufferTexture(framebuffer_main, GL_DEPTH_STENCIL_ATTACHMENT, texture_fmain_depth_stencil, 0);
     glNamedFramebufferDrawBuffer(framebuffer_main, GL_COLOR_ATTACHMENT0);
     assert((glCheckNamedFramebufferStatus(framebuffer_main, GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) && "Main framebuffer initialisation error.");
+    app_state.heights_buffer = &vbo_heights_plane;
 
     program_plane = glCreateProgram();  shader_plane_vert = glCreateShader(GL_VERTEX_SHADER); shader_plane_frag = glCreateShader(GL_FRAGMENT_SHADER);
     program_plane_grid = glCreateProgram();  shader_plane_grid_vert = glCreateShader(GL_VERTEX_SHADER); shader_plane_grid_frag = glCreateShader(GL_FRAGMENT_SHADER);
@@ -608,7 +611,7 @@ static void recalculate_plane_height_field(g3d::HandleProgram program, g3d::Hand
         *current_size = vertex_count; 
         glDeleteBuffers(1, height_buffer);
         glCreateBuffers(1, height_buffer);
-        glNamedBufferStorage(*height_buffer, vertex_count * sizeof(float), 0, 0);
+        glNamedBufferStorage(*height_buffer, vertex_count * sizeof(float), 0, GL_MAP_READ_BIT);
     }
 
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, *height_buffer);
@@ -673,7 +676,24 @@ static void draw_menu_bar() {
                 ImGui::EndPopup();
             }
             
-            ImGui::Button("Export project to obj");
+            if(ImGui::Button("Export project to obj")) {
+                ImGui::OpenPopup("export_to_obj_popup");
+            }
+            if(ImGui::BeginPopup("export_to_obj_popup")) {
+                ImGui::Text("Filename:"); ImGui::SameLine();
+                ImGui::PushItemWidth(160.0f);
+                ImGui::InputText("##Filename", &file_name);
+                const auto spacex = ImGui::GetContentRegionAvail().x;
+                ImGui::Indent(spacex - 100.0f);
+                if(ImGui::Button("Save", ImVec2(100.0f, 0.0f))) {
+                    std::string file_name_with_ext = file_name + ".3dg";
+                    
+                    export_to_obj(file_name_with_ext, *app_state.heights_buffer); 
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::PopItemWidth();
+                ImGui::EndPopup();
+            }
             ImGui::EndMenu();
         }
 
@@ -767,7 +787,6 @@ static void draw_right_child() {
             ImGui::EndTabBar();
         }
 
-    
         static const auto add_variable_button = [](const auto& btn_name, auto &vec, const auto &val) {
             if(ImGui::Button(btn_name)) {
                 std::string name = "_" + std::to_string(vec.size() + 1);
@@ -963,7 +982,6 @@ static void save_project(const char *file_name) {
     auto &rs = app_state.render_settings;
     content << rs.is_grid_rendered << ' ' << rs.is_plane_grid_rendered;
 
-
     file << content.rdbuf(); file.close();
 }
 
@@ -1026,6 +1044,46 @@ static void load_project(const char *file_name) {
         }
         }
     }
+}
+static void export_to_obj(const std::string& path, g3d::HandleBuffer buffer) {
+    const auto buffer_size = (app_state.plane_settings.detail + 1) * (app_state.plane_settings.detail + 1);
+    const auto *vs = (float*)glMapNamedBufferRange(buffer, 0, buffer_size, GL_MAP_READ_BIT);
+
+    std::string file_content;
+
+    const auto s = app_state.plane_settings.bounds;
+    const auto n = app_state.plane_settings.detail;
+    for(auto i=0llu; i<buffer_size; ++i) {
+        float x = i % (n+1);
+        float z = i / (n+1); // x,z are in [0, detail] range
+        float y = vs[(uint32_t)z*(n+1) + (uint32_t)x];
+        x /= n; z /= n;  // x,z are in [0, 1] range
+        x = x*2.0*s - s;
+        z = z*2.0*s - s; // x,z are in [-bounds, bounds] range
+
+        file_content +=  "v " + std::to_string(x) + " " + std::to_string(y) + " " + std::to_string(z) + '\n';
+    }
+
+    file_content += '\n';
+
+    for(auto i=0llu; i<n; ++i) {
+        for(auto j=0llu; j<n; ++j) {
+            uint32_t idx = i * (n+1) + j;
+            uint32_t a = idx;
+            uint32_t b = idx + (n+1);
+            uint32_t c = idx + 1;
+            uint32_t d = b + 1;
+
+            ++a; ++b; ++c; ++d;
+
+            file_content += "f " + std::to_string(a) + ' ' + std::to_string(b) + ' ' + std::to_string(c) + '\n';
+            file_content += "f " + std::to_string(c) + ' ' + std::to_string(b) + ' ' + std::to_string(d) + '\n';
+        }
+    }
+
+    printf("%s\n", file_content.c_str());
+
+    glUnmapNamedBuffer(buffer);
 }
 
 static void uniform1f(uint32_t program, const char* name, float value) {
