@@ -733,7 +733,6 @@ static void draw_right_child() {
                     ImGui::ColorEdit3("Background color", &app_state.color_settings.color_background.x);
                     ImGui::ColorEdit3("Plane color", &app_state.color_settings.color_plane.x);
                     ImGui::ColorEdit3("Grid color", &app_state.color_settings.color_grid.x);
-                    ImGui::ColorEdit3("Plane grid color", &app_state.color_settings.color_plane_grid.x);
                 }
                 if (ImGui::CollapsingHeader("Plane Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
                     ImGui::PushItemWidth(150.0);
