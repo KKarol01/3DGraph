@@ -47,6 +47,11 @@ struct AppState {
     bool needs_recompilation = false;
     uint32_t* heights_buffer=nullptr;
     bool log_list_scroll_down = false;
+    struct {
+        ImFont *font = nullptr;
+        uint32_t size;
+    } fonts[4];
+    uint32_t font_idx = 2; // from 1 to 4 for GUI reasons to look good
 
     struct PlaneSettings {
         uint32_t detail{3}, bounds{1};
@@ -268,6 +273,12 @@ static void start_application(const char* window_title, uint32_t window_width, u
     ImGui_ImplGlfw_InitForOpenGL(app_state.window.pglfw_window, true);
     ImGui_ImplOpenGL3_Init("#version 460 core");
     ImGui::StyleColorsDark();
+    auto &io = ImGui::GetIO();
+    
+    app_state.fonts[0].font = io.Fonts->AddFontFromFileTTF("fonts/consola.ttf", 12);
+    app_state.fonts[1].font = io.Fonts->AddFontFromFileTTF("fonts/consola.ttf", 14);
+    app_state.fonts[2].font = io.Fonts->AddFontFromFileTTF("fonts/consola.ttf", 20);
+    app_state.fonts[3].font = io.Fonts->AddFontFromFileTTF("fonts/consola.ttf", 25);
 
     glfwSetFramebufferSizeCallback(app_state.window.pglfw_window, on_window_resize);
 }
@@ -276,11 +287,14 @@ static void terminate_application() {
     
 }
 static void imgui_newframe() {
+
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    ImGui::PushFont(app_state.fonts[app_state.font_idx-1].font);
 }
 static void imgui_renderframe() {
+    ImGui::PopFont();
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
@@ -507,7 +521,9 @@ static void draw_gui() {
     ImGui::SetNextWindowSize(ImVec2(window.width, window.height));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0,0));
     if (ImGui::Begin("main screen", 0, main_screen_flags)) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10,10));
         draw_menu_bar();
+        ImGui::PopStyleVar();
         draw_left_child(); ImGui::SameLine(); draw_right_child();
     }
     ImGui::End();
@@ -713,24 +729,31 @@ static void draw_right_child() {
                 break; 
             }
             case 3: {
-                if (ImGui::CollapsingHeader("Color Settings")) {
+                if (ImGui::CollapsingHeader("Color Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
                     ImGui::ColorEdit3("Background color", &app_state.color_settings.color_background.x);
                     ImGui::ColorEdit3("Plane color", &app_state.color_settings.color_plane.x);
                     ImGui::ColorEdit3("Grid color", &app_state.color_settings.color_grid.x);
                     ImGui::ColorEdit3("Plane grid color", &app_state.color_settings.color_plane_grid.x);
                 }
-                if (ImGui::CollapsingHeader("Plane Settings")) {
+                if (ImGui::CollapsingHeader("Plane Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
                     ImGui::PushItemWidth(150.0);
                     ImGui::SliderInt("Plane bounds", (int*)&app_state.plane_settings.bounds, 1, 100);
                     ImGui::SliderInt("Plane detail level", (int*)&app_state.plane_settings.detail, 1, 1000);
-                    ImGui::SliderFloat("Plane grid step", &app_state.plane_settings.grid_step, 1.0f, 100.0f);
-                    ImGui::SliderFloat("Plane grid line thickness", &app_state.plane_settings.grid_line_thickness, 0.1f, 5.0f);
-                    ImGui::Checkbox("Plane detail affects grid step", &app_state.plane_settings.is_detail_affecting_grid_step);
                     ImGui::PopItemWidth();
                 }
-                if(ImGui::CollapsingHeader("Rendering Settings")) {
+                if(ImGui::CollapsingHeader("Rendering Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
                    ImGui::Checkbox("Grid drawing", &app_state.render_settings.is_grid_rendered);
-                   ImGui::Checkbox("Plane grid drawing", &app_state.render_settings.is_plane_grid_rendered);
+                }
+                if(ImGui::CollapsingHeader("Editor Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+                        static const char* font_size_names[] = {"Small", "Normal", "Large", "Extra Large"};
+                    if(ImGui::BeginCombo("Font size", font_size_names[app_state.font_idx-1])) {
+                        for(int i=0; i<4; ++i) {
+                            if(ImGui::Selectable(font_size_names[i], false)) {
+                                app_state.font_idx = i+1;
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
                 }
                 break; 
             }
@@ -762,21 +785,50 @@ static void draw_user_variables_table(SelectedTab tab) {
         }
     };
 
-    static const auto EditableSelectable = [](size_t unique_idx, std::string &data, float overrided_height = 0.0f, bool disable_editing = false) {
+    static const auto EditableSelectable = [](size_t unique_idx, std::string &data, float overrided_height = 0.0f, bool disable_editing = false, bool open_in_modal = false) {
         static std::map<size_t, std::pair<bool, bool>> data_specific_settings;
         auto &data_setting = data_specific_settings[unique_idx];
         bool &is_editing = data_setting.first;
         bool &focus_on_text_input = data_setting.second;
-
-        if(is_editing == false) {
-            ImGui::Selectable(data.c_str(), false, 0, ImVec2(ImGui::GetContentRegionAvail().x, overrided_height != 0.0f ? overrided_height : ImGui::GetTextLineHeightWithSpacing()));
-            if(disable_editing == false && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) { is_editing = true; focus_on_text_input = true; }
-        } else if(disable_editing == false) {
-            if(focus_on_text_input) { focus_on_text_input = false; ImGui::SetKeyboardFocusHere(); }
-            ImGui::InputText("##text", &data);
-            if(ImGui::IsItemDeactivated()) { is_editing = false; app_state.needs_recompilation = true; }
+        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+        if (is_editing && open_in_modal) { 
+            ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f)); 
+            ImGui::SetNextWindowSize(ImVec2(ImGui::GetMainViewport()->Size.x, 0.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10,10));
         }
-
+        if (is_editing && ImGui::BeginPopupModal("SelectableEditingModal", 0, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
+            if(focus_on_text_input) { ImGui::SetKeyboardFocusHere(); focus_on_text_input = false; }
+            ImGui::Text("Type your awesome function equation");
+            ImGui::Separator();
+            ImGui::SetNextItemWidth(ImGui::GetMainViewport()->Size.x);
+            ImGui::InputText("##value", &data);
+            if(ImGui::IsItemDeactivated()) { is_editing = false; app_state.needs_recompilation = true; ImGui::CloseCurrentPopup(); }
+            ImGui::PopStyleVar();
+            ImGui::EndPopup();
+        } else {
+            if(open_in_modal == false && is_editing) {
+                std::string unique_str = "##" + std::to_string(unique_idx);
+                if(focus_on_text_input) { ImGui::SetKeyboardFocusHere(); focus_on_text_input = false; }
+                ImGui::InputText(unique_str.c_str(), &data);
+                if(ImGui::IsItemDeactivated()) {
+                    std::stringstream trimmer;
+                    trimmer << data;
+                    std::string data_trimmed;
+                    trimmer >> data_trimmed;
+                    if(data_trimmed == "f") {
+                        data = "invalid name";
+                        return;
+                    }
+                    is_editing = false; app_state.needs_recompilation = true; 
+                }
+            } else {
+                ImGui::Selectable(data.c_str(), false, 0, ImVec2(ImGui::GetContentRegionAvail().x, overrided_height != 0.0f ? overrided_height : ImGui::GetTextLineHeightWithSpacing()));
+                if(disable_editing == false && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) { 
+                    is_editing = true; focus_on_text_input = true;
+                    if (open_in_modal) { ImGui::OpenPopup("SelectableEditingModal"); }
+                }
+            }
+        }
     };
 
     struct ItemState {
@@ -812,7 +864,7 @@ static void draw_user_variables_table(SelectedTab tab) {
 
         ImGui::TableSetColumnIndex(1);
         if constexpr(std::same_as<std::remove_cvref_t<decltype(data)>, Function>) {
-            EditableSelectable(idx*2+1, data.value);
+            EditableSelectable(idx*2+1, data.value, 0.0f, false, true);
         } 
         else if constexpr(std::same_as<std::remove_cvref_t<decltype(data)>, Constant>) {
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
@@ -884,6 +936,9 @@ static void save_project(const char *file_name) {
     auto &rs = app_state.render_settings;
     content << rs.is_grid_rendered << ' ' << rs.is_plane_grid_rendered;
 
+    content << "\n[Editor Settings]\n";
+    content << app_state.font_idx;
+
     file << content.rdbuf(); file.close();
 }
 
@@ -903,8 +958,9 @@ static void load_project(const char *file_name) {
         else if (line.starts_with("[Color Settings]"))      { resource_id = 3; continue; }
         else if (line.starts_with("[Plane Settings]"))      { resource_id = 4; continue; }
         else if (line.starts_with("[Render Settings]"))     { resource_id = 5; continue; }
+        else if (line.starts_with("[Editor Settings]"))     { resource_id = 6; continue; }
 
-        if (resource_id == -1 || resource_id > 5) { throw std::runtime_error{"Error while reading the project file - label not found: " + line}; }
+        if (resource_id == -1 || resource_id > 6) { throw std::runtime_error{"Error while reading the project file - label not found: " + line}; }
 
         std::stringstream ssline{line};
         switch (resource_id) {
@@ -943,6 +999,11 @@ static void load_project(const char *file_name) {
         case 5: {
             auto &rs = app_state.render_settings;
             ssline >> rs.is_grid_rendered >> rs.is_plane_grid_rendered;
+            break;
+        }
+        case 6: {
+            auto &rs = app_state;
+            ssline >> rs.font_idx;
             break;
         }
         }

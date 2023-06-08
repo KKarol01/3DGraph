@@ -17,6 +17,8 @@ target_link_directories(opengl_engine PRIVATE "3rdparty/lib")
 target_include_directories(opengl_engine PRIVATE "3rdparty/include" ".")
 target_link_libraries(opengl_engine PRIVATE "glfw3" "nfd")
 
+file(COPY "fonts" DESTINATION ".")
+
 #target_compile_definitions(opengl_engine PRIVATE )
 add_subdirectory("3rdparty")
 #add_subdirectory("assets")
