@@ -78,7 +78,6 @@ static void imgui_renderframe();
 static void resize_main_frambuffer(uint32_t width, uint32_t height);
 static void set_rendering_state_opengl(const g3d::RenderState&);
 static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader);
-static void create_plane_grid_source_and_compiler(g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader);
 static void create_grid_shader_source_and_compile (g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader);
 static void create_compute_shader(g3d::HandleProgram program, g3d::HandleShader &compute_shader);
 static void recalculate_plane_height_field(g3d::HandleProgram program, g3d::HandleBuffer *height_buffer, uint32_t *current_size);
@@ -102,7 +101,6 @@ int main() {
 
     g3d::HandleProgram program_compute; g3d::HandleShader shader_compute;
     g3d::HandleProgram program_plane;   g3d::HandleShader shader_plane_vert;    g3d::HandleShader shader_plane_frag;
-    g3d::HandleProgram program_plane_grid;   g3d::HandleShader shader_plane_grid_vert;    g3d::HandleShader shader_plane_grid_frag;
     g3d::HandleProgram program_line;    g3d::HandleShader shader_line_vert;     g3d::HandleShader shader_line_frag;
     g3d::HandleProgram program_grid;    g3d::HandleShader shader_grid_vert;     g3d::HandleShader shader_grid_frag;
 
@@ -123,7 +121,6 @@ int main() {
     app_state.heights_buffer = &vbo_heights_plane;
 
     program_plane = glCreateProgram();  shader_plane_vert = glCreateShader(GL_VERTEX_SHADER); shader_plane_frag = glCreateShader(GL_FRAGMENT_SHADER);
-    program_plane_grid = glCreateProgram();  shader_plane_grid_vert = glCreateShader(GL_VERTEX_SHADER); shader_plane_grid_frag = glCreateShader(GL_FRAGMENT_SHADER);
     program_grid  = glCreateProgram();  shader_grid_vert  = glCreateShader(GL_VERTEX_SHADER); shader_grid_frag  = glCreateShader(GL_FRAGMENT_SHADER);
 
     glCreateVertexArrays(1, &vao_plane);
@@ -180,9 +177,6 @@ int main() {
     g3d::RenderState plane_render_state{ 
         .vao = vao_plane, .program = program_plane 
     };
-    g3d::RenderState plane_grid_render_state{ 
-        .vao = vao_line, .program = program_plane_grid 
-    };
     g3d::RenderState grid_render_state{ 
         .vao = vao_line, .program = program_grid, .line_width = 2.0f
     };
@@ -191,7 +185,6 @@ int main() {
     
     create_plane_shader_source_and_compile(program_plane, shader_plane_vert, shader_plane_frag);
     create_grid_shader_source_and_compile(program_grid, shader_grid_vert, shader_grid_frag);
-    create_plane_grid_source_and_compiler(program_plane_grid, shader_plane_grid_vert, shader_plane_grid_frag);
     create_compute_shader(program_compute, shader_compute);
     uint32_t current_buffer_size=0;
     while(glfwWindowShouldClose(window.pglfw_window) == false) {
@@ -239,26 +232,6 @@ int main() {
         uniform1f(program_plane, "size", app_state.plane_settings.bounds);
         uniform3f(program_plane, "user_color", app_state.color_settings.color_plane);
         glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, app_state.plane_settings.detail * app_state.plane_settings.detail);
-        set_rendering_state_opengl(plane_grid_render_state);
-        uniformm4(program_plane_grid, "v", app_state.camera.view_matrix());
-        uniformm4(program_plane_grid, "p", app_state.camera.projection_matrix());
-        uniform1f(program_plane_grid, "detail", app_state.plane_settings.detail);
-        uniform1f(program_plane_grid, "bounds", app_state.plane_settings.bounds);
-        uniform3f(program_plane_grid, "user_color", app_state.color_settings.color_plane_grid);
-        uniform1f(program_plane_grid, "should_override_detail", app_state.plane_settings.is_detail_affecting_grid_step ? 0.0 : 1.0);
-        uniform1f(program_plane_grid, "override_detail_value", 1.0/(app_state.plane_settings.bounds*2.0));
-        uniform3f(program_plane_grid, "cam_pos", glm::vec3{app_state.camera.view_matrix() * glm::vec4{0,0,0,1}});
-
-        glEnable(GL_POLYGON_OFFSET_LINE);
-        glPolygonOffset(1.0f, 1.0f);
-        glLineWidth(app_state.plane_settings.grid_line_thickness);
-        if(app_state.plane_settings.is_detail_affecting_grid_step == 1.0) {
-            glDrawArraysInstanced(GL_LINES, 0, 2, glm::max(2u, app_state.plane_settings.detail * app_state.plane_settings.detail));
-        } else {
-            glDrawArraysInstanced(GL_LINES, 0, 2, glm::max(2u, app_state.plane_settings.detail * (app_state.plane_settings.bounds*2u+1)));
-        }
-        glLineWidth(1.0);
-        glDisable(GL_POLYGON_OFFSET_LINE);
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glViewport(0, 0, app_state.window.width, app_state.window.height);
@@ -402,79 +375,7 @@ static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g
     vertex_shader   = new_vertex_shader; 
     fragment_shader = new_fragment_shader;
 }
-static void create_plane_grid_source_and_compiler(g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader) {
-        const char *vertex_source = R"glsl(
-        #version 460 core
-        layout(location=0) in vec3 pos;
-        layout(std430, binding=0) buffer Heights {float values[]; };
 
-        uniform float bounds;
-        uniform float detail;
-        uniform mat4 v;
-        uniform mat4 p;
-
-        void main() {
-            uint xidx, yidx;
-            vec3 vpos = pos;
-			float vc = detail+1.0;
-			vpos.x = vpos.x*0.5+0.5;
-			vpos.x *= 2.0*bounds / detail;
-			vpos.xz -= bounds;
-
-            xidx = (gl_InstanceID % uint(detail)) + uint(pos.x*0.5+0.5);
-            yidx = (gl_InstanceID / uint(detail));
-			
-			vpos.x += float((gl_InstanceID % uint(detail))) * ( 2.0*bounds/detail );
-            float z_step = (2.0*bounds/(max(1.0,detail-1.0)));
-			vpos.z += float(yidx) * z_step;
-            float height = 0.0;
-			height =  values[yidx*uint(vc) + xidx];
-		
-			vpos.y = height;
-
-            vec4 vvpos = v * vec4(vpos, 1.0);
-            if(dot(vvpos.xyz, vvpos.xyz) > 1.0)
-            vvpos.xyz += -normalize(vvpos.xyz) * 0.25;
-            
-            gl_Position = p * vec4(vvpos.xyz, 1.0);
-        }
-    
-    )glsl";
-    const char *fragment_source = R"glsl(
-        #version 460 core
-        out vec4 FRAG_COLOR;
-        uniform vec3 user_color;
-        void main() { FRAG_COLOR = vec4(user_color, 1.0); }
-    )glsl";
-
-    glShaderSource(vertex_shader, 1, &vertex_source, 0); glShaderSource(fragment_shader, 1, &fragment_source, 0);
-    glCompileShader(vertex_shader); glCompileShader(fragment_shader);
-
-    char* error_log = nullptr;
-    const auto get_shader_compilation_error_message = [&](g3d::HandleShader shader){
-        int compile_status;
-        glGetShaderiv(shader, GL_COMPILE_STATUS, &compile_status);
-
-        if(compile_status != GL_TRUE) {
-            glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &compile_status);
-            error_log = (char*)malloc(compile_status);
-            assert(error_log != nullptr && "Could not allocate memory for shader error log. Possibly the system has no free memory.");
-            glGetShaderInfoLog(shader, compile_status, &compile_status, error_log);
-        }
-    };
-
-    get_shader_compilation_error_message(vertex_shader);
-    if(error_log != nullptr) {
-        std::string error_message;
-        error_message += "[SHADER COMPILATION ERROR]: \"";
-        error_message += error_log; error_message += "\"";
-        delete[] error_log;
-        throw std::runtime_error{error_message};
-    }
-
-    glAttachShader(program, vertex_shader); glAttachShader(program, fragment_shader);
-    glLinkProgram(program);
-}
 static void create_grid_shader_source_and_compile(g3d::HandleProgram program, g3d::HandleShader &vertex_shader, g3d::HandleShader &fragment_shader) {
     const char *vertex_source = R"glsl(
         #version 460 core
