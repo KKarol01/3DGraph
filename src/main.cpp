@@ -46,6 +46,7 @@ struct AppState {
     std::vector<std::string> logs;
     bool needs_recompilation = false;
     uint32_t* heights_buffer=nullptr;
+    bool log_list_scroll_down = false;
 
     struct PlaneSettings {
         uint32_t detail{3}, bounds{1};
@@ -90,6 +91,7 @@ static void uniformm4(uint32_t program, const char* name, const glm::mat4& value
 static void save_project(const char *file_name);
 static void load_project(const char *file_name);
 static void export_to_obj(const std::string& file_name, g3d::HandleBuffer buffer);
+static void log_list_add_message(const std::string& msg);
 
 int main() {
     start_application("3DCalc", 1280, 960);
@@ -202,17 +204,7 @@ int main() {
             try {
                 create_compute_shader(program_compute, shader_compute);
             } catch(const std::exception& err) {
-                std::string msg = err.what();
-                
-                int fourth_colon_idx = -1;
-
-                for(int i=0, c=0; i<msg.length(); ++i) { if (msg.at(i)==':' && ++c == 4) { fourth_colon_idx=i; break; } }
-                assert("Could not locate fourth colon in shader compilation error message." && fourth_colon_idx!=-1);
-
-                                                                        // -3 for last ", last \n and to skip fourth colon
-                msg = msg.substr(fourth_colon_idx+1, msg.length() - fourth_colon_idx - 3);
-
-                app_state.logs.push_back(msg);
+                log_list_add_message(err.what());
             }
         }
 
@@ -403,28 +395,6 @@ static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g
     glShaderSource(new_fragment_shader, 1, &fragment_source, 0);
     glCompileShader(new_vertex_shader); glCompileShader(new_fragment_shader);
 
-    char* error_log = nullptr;
-    const auto get_shader_compilation_error_message = [&](g3d::HandleShader shader){
-        int compile_status;
-        glGetShaderiv(shader, GL_COMPILE_STATUS, &compile_status);
-
-        if(compile_status != GL_TRUE) {
-            glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &compile_status);
-            error_log = (char*)malloc(compile_status);
-            assert(error_log != nullptr && "Could not allocate memory for shader error log. Possibly the system has no free memory.");
-            glGetShaderInfoLog(shader, compile_status, &compile_status, error_log);
-        }
-    };
-
-    get_shader_compilation_error_message(new_vertex_shader);
-    if(error_log != nullptr) {
-        std::string error_message;
-        error_message += "[SHADER COMPILATION ERROR]: \"";
-        error_message += error_log; error_message += "\"";
-        delete[] error_log;
-        throw std::runtime_error{error_message};
-    }
-
     glDetachShader(program, vertex_shader); glDetachShader(program, fragment_shader);
     glDeleteShader(vertex_shader); glDeleteShader(fragment_shader);
     glAttachShader(program, new_vertex_shader); glAttachShader(program, new_fragment_shader);
@@ -607,8 +577,7 @@ static void create_compute_shader(g3d::HandleProgram program, g3d::HandleShader 
     get_shader_compilation_error_message(compute_shader);
     if(error_log != nullptr) {
         std::string error_message;
-        error_message += "[SHADER COMPILATION ERROR]: \"";
-        error_message += error_log; error_message += "\"";
+        error_message += error_log;
         delete[] error_log;
         throw std::runtime_error{error_message};
     }
@@ -686,7 +655,7 @@ static void draw_menu_bar() {
                         std::string file_name_with_ext = file_name + ".3dg";
                         
                         save_project(file_name_with_ext.c_str()); 
-                        app_state.logs.push_back("Project successfully saved");
+                        log_list_add_message("Project successfully saved");
                         ImGui::CloseCurrentPopup();
                    }
                 }
@@ -716,7 +685,7 @@ static void draw_menu_bar() {
                         if (FAILED(hr)) { assert(false); }
 
                         std::filesystem::path _p = std::string(path) + '\\' + file_name_with_ext;
-                        app_state.logs.push_back(std::string{"File successfully exported at: \'"} + _p.string().c_str() + '\'');
+                        log_list_add_message(std::string{"File successfully exported at: \'"} + _p.string().c_str() + '\'');
                         export_to_obj(_p.string(), *app_state.heights_buffer); 
                         ImGui::CloseCurrentPopup();
                    }
@@ -773,10 +742,10 @@ static void draw_left_child() {
             if(ImGui::BeginListBox("##log_list", ImGui::GetContentRegionAvail())) {
                 uint32_t msgidx = 1;
                 for(const auto& l : app_state.logs) {
-                    std::string formatted_msg = std::to_string(msgidx++) + ".\t" + l;
+                    std::string formatted_msg = std::to_string(msgidx++) + ".\t" + l + '\n';
                     ImGui::Text(formatted_msg.c_str());
                 }
-                ImGui::SetScrollHereY();
+                if (app_state.log_list_scroll_down) {ImGui::SetScrollHereY(); app_state.log_list_scroll_down = false; }
                 ImGui::EndListBox();
             }
             ImGui::PopStyleColor();
@@ -1119,6 +1088,11 @@ static void export_to_obj(const std::string& path, g3d::HandleBuffer buffer) {
     std::fstream file{path, std::ios::trunc | std::ios::out};
     file << file_content;
 
+}
+
+static void log_list_add_message(const std::string& msg) {
+    app_state.logs.push_back(msg);
+    app_state.log_list_scroll_down = true;
 }
 
 static void uniform1f(uint32_t program, const char* name, float value) {
