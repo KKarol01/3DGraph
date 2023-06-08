@@ -222,7 +222,7 @@ int main() {
         uniform1f(program_compute, "detail", app_state.plane_settings.detail);
         uniform1f(program_compute, "bounds", app_state.plane_settings.bounds);
         uniform1f(program_compute, "TIME", (float)glfwGetTime());
-        for(const auto& s : app_state.sliders) { uniform1f(program_plane, s.name.c_str(), s.value); }
+        for(const auto& s : app_state.sliders) { uniform1f(program_compute, s.name.c_str(), s.value); }
         recalculate_plane_height_field(program_compute, &vbo_heights_plane, &current_buffer_size); 
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
         set_rendering_state_opengl(plane_render_state);
@@ -343,7 +343,7 @@ static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g
             #version 460 core
             out vec4 FRAG_COLOR;
             in vec3 vout_pos;
-            flat in vec3 vout_norm;
+            in vec3 vout_norm;
             uniform vec3 user_color;
 
             void main() { 
@@ -505,11 +505,13 @@ static void draw_gui() {
     auto &window = app_state.window;
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImVec2(window.width, window.height));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0,0));
     if (ImGui::Begin("main screen", 0, main_screen_flags)) {
         draw_menu_bar();
         draw_left_child(); ImGui::SameLine(); draw_right_child();
     }
     ImGui::End();
+    ImGui::PopStyleVar();
 }
 static void on_window_resize(GLFWwindow*, int width, int height) {
     app_state.window.has_just_resized = true;
@@ -604,11 +606,12 @@ static void draw_left_child() {
     left_split_size.x *= left_split_width_factor;
 
     ImVec2 canvas_size(1,1);
-    if (ImGui::BeginChild("left split", left_split_size, true)) {
+    if (ImGui::BeginChild("left split", left_split_size, false)) {
         const auto left_split_content = ImGui::GetContentRegionAvail();
         const auto aspect = (float)app_state.window.width / (float)app_state.window.height;
         canvas_size = ImVec2(left_split_content.x, left_split_content.x / aspect);
 
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0,0));
         if (ImGui::BeginChild("canvas", canvas_size, true)) {
             const auto handle = app_state.framebuffer_main.textures[0].second->handle;
             const auto image_size  = ImGui::GetContentRegionAvail();
@@ -627,6 +630,7 @@ static void draw_left_child() {
             ImGui::Image((void *)(handle), image_size);
         }
         ImGui::EndChild();
+        ImGui::PopStyleVar();
 
         if (ImGui::BeginChild("logs", ImVec2(0, 0), true, ImGuiWindowFlags_MenuBar)) {
             if (ImGui::BeginMenuBar()) {
@@ -652,7 +656,7 @@ static void draw_left_child() {
 
     auto &style = ImGui::GetStyle();
     ImGui::SameLine();
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() - style.ItemSpacing.x);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX());
     ImGui::Button("##split factor slider", ImVec2(10.0f, left_split_size.y));
     if (ImGui::IsItemActive()) {
         left_split_width_factor += ImGui::GetMouseDragDelta(0, 0.01).x / (float)app_state.window.width;
@@ -672,8 +676,8 @@ static void draw_user_variables_table(SelectedTab tab);
 static void draw_right_child() {
     static int selected_tab_idx = 0;
 
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() - ImGui::GetStyle().WindowPadding.x);
-    if(ImGui::BeginChild("right split", ImGui::GetContentRegionAvail(), true)) {
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX());
+    if(ImGui::BeginChild("right split", ImGui::GetContentRegionAvail(), false)) {
         if(ImGui::BeginTabBar("right split tabs")) {
             for(int i=0; i < 4; ++i) {
                 const char *name = SelectedTabNames[i];
