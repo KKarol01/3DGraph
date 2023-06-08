@@ -315,6 +315,9 @@ static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g
         uniform float detail;
         uniform float size;
 
+        out vec3 vout_pos;
+        out vec3 vout_norm;
+
         void main() {
             uint gx = (gl_InstanceID) % uint(detail);
             uint gy = (gl_InstanceID) / uint(detail);
@@ -325,35 +328,27 @@ static void create_plane_shader_source_and_compile(g3d::HandleProgram program, g
             vpos = vpos - size;
             vpos.x += (2.0*size)/detail * float(gx);
             vpos.y += (2.0*size)/detail * float(gy);
-            gl_Position = p * v * vec4(vpos.x, height, vpos.y, 1.0);
+            vout_pos = vec3(vpos.x, height, vpos.y);
+
+            vec3 a = vout_pos;
+            vec3 b = vec3(vpos.x + (2.0*size)/detail, values[gidx+1], vpos.y);
+            vec3 c = vec3(vpos.x, values[gidx+uint(detail+1.0)], vpos.y + (2.0*size)/detail);
+
+            vout_norm = normalize(cross(c - a, b - a));
+
+            gl_Position = p * v * vec4(vout_pos, 1.0);
         }
     )glsl";
         std::string frag_src = R"glsl(
             #version 460 core
             out vec4 FRAG_COLOR;
-            in vec2 vfrag_pos;
+            in vec3 vout_pos;
+            flat in vec3 vout_norm;
             uniform vec3 user_color;
-            uniform vec3 user_grid_color;
-            uniform float grid_step;
-            uniform float grid_line_thickness;
-			uniform float detail;
-			uniform float detail_affects_step;
-			uniform float draw_grid;
-            void main() { 
-                // if (draw_grid == 0.0) {
-                //     FRAG_COLOR = vec4(user_color, 1.0);
-                //     return;
-                // }
 
-                // vec2 vp = vfrag_pos;
-                // float detail_factor = detail_affects_step==1.0 ? detail : 1.0;
-                // float fvpx = fract(vp.x*detail_factor/(grid_step)), fvpy = fract(vp.y*detail_factor/(grid_step));
-                // float a = (1.0 - grid_line_thickness), b = grid_line_thickness;
-                // float in_ab_range = (fvpx<a || fvpx>b || fvpy<a || fvpy>b) ? 1.0 : 0.0;
-                
-                // vec3 color = mix(user_color, user_grid_color, in_ab_range);
-                // FRAG_COLOR = vec4(color, 1.0); 
-                FRAG_COLOR = vec4(user_color, 1.0);
+            void main() { 
+                float att = clamp(dot(vec3(0.0,1.0,0.0), vout_norm), 0.3, 1.0);
+                FRAG_COLOR = vec4(user_color * att, 1.0);
             }
         
         )glsl";
