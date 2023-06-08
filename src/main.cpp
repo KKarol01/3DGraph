@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <map>
 #include <concepts>
+#include <ShlObj_core.h>
 
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -201,7 +202,17 @@ int main() {
             try {
                 create_compute_shader(program_compute, shader_compute);
             } catch(const std::exception& err) {
-                std::cerr << err.what();
+                std::string msg = err.what();
+                
+                int fourth_colon_idx = -1;
+
+                for(int i=0, c=0; i<msg.length(); ++i) { if (msg.at(i)==':' && ++c == 4) { fourth_colon_idx=i; break; } }
+                assert("Could not locate fourth colon in shader compilation error message." && fourth_colon_idx!=-1);
+
+                                                                        // -3 for last ", last \n and to skip fourth colon
+                msg = msg.substr(fourth_colon_idx+1, msg.length() - fourth_colon_idx - 3);
+
+                app_state.logs.push_back(msg);
             }
         }
 
@@ -646,6 +657,7 @@ static void draw_menu_bar() {
     if (ImGui::BeginMenuBar()) {
         if(ImGui::BeginMenu("Project...")) {
             static std::string file_name;
+            static bool no_name_error = false;
             if (ImGui::Button("Open project")) {
                 nfdchar_t *outPath = NULL;
                 nfdresult_t result = NFD_OpenDialog("3dg", std::filesystem::current_path().string().c_str(), &outPath);
@@ -667,12 +679,20 @@ static void draw_menu_bar() {
                 const auto spacex = ImGui::GetContentRegionAvail().x;
                 ImGui::Indent(spacex - 100.0f);
                 if(ImGui::Button("Save", ImVec2(100.0f, 0.0f))) {
-                    std::string file_name_with_ext = file_name + ".3dg";
-                    
-                    save_project(file_name_with_ext.c_str()); 
-                    ImGui::CloseCurrentPopup();
+                    if (no_name_error == false && file_name.empty()) { no_name_error = true; }
+
+                   if (no_name_error == false || file_name.empty() == false) {
+                        no_name_error = false;
+                        std::string file_name_with_ext = file_name + ".3dg";
+                        
+                        save_project(file_name_with_ext.c_str()); 
+                        app_state.logs.push_back("Project successfully saved");
+                        ImGui::CloseCurrentPopup();
+                   }
                 }
                 ImGui::PopItemWidth();
+                ImGui::SetCursorPosX(10.0f);
+                if (no_name_error) { ImGui::TextColored(ImVec4(255, 0,0,255), "File name field cannot be empty!"); }
                 ImGui::EndPopup();
             }
             
@@ -685,13 +705,26 @@ static void draw_menu_bar() {
                 ImGui::InputText("##Filename", &file_name);
                 const auto spacex = ImGui::GetContentRegionAvail().x;
                 ImGui::Indent(spacex - 100.0f);
-                if(ImGui::Button("Save", ImVec2(100.0f, 0.0f))) {
-                    std::string file_name_with_ext = file_name + ".3dg";
-                    
-                    export_to_obj(file_name_with_ext, *app_state.heights_buffer); 
-                    ImGui::CloseCurrentPopup();
+                if(ImGui::Button("Export", ImVec2(100.0f, 0.0f))) {
+                    if (no_name_error == false && file_name.empty()) { no_name_error = true; }
+
+                   if (no_name_error == false || file_name.empty() == false) {
+                        no_name_error = false;
+                        std::string file_name_with_ext = file_name + ".obj";
+                        TCHAR path[MAX_PATH];
+                        HRESULT hr = SHGetFolderPath(NULL, CSIDL_MYDOCUMENTS    , NULL, SHGFP_TYPE_CURRENT, path);
+                        if (FAILED(hr)) { assert(false); }
+
+                        std::filesystem::path _p = std::string(path) + '\\' + file_name_with_ext;
+                        app_state.logs.push_back(std::string{"File successfully exported at: \'"} + _p.string().c_str() + '\'');
+                        export_to_obj(_p.string(), *app_state.heights_buffer); 
+                        ImGui::CloseCurrentPopup();
+                   }
                 }
+
                 ImGui::PopItemWidth();
+            ImGui::SetCursorPosX(10.0f);
+                if (no_name_error) { ImGui::TextColored(ImVec4(255, 0,0,255), "File name field cannot be empty!"); }
                 ImGui::EndPopup();
             }
             ImGui::EndMenu();
@@ -1009,6 +1042,7 @@ static void load_project(const char *file_name) {
         case 0: {
             Function f;
             ssline >> f.name >> f.value;
+            while (ssline.eof()==false) { std::string rest; ssline >> rest; f.value += rest; }
             app_state.functions.push_back(f);
             break;
         }
@@ -1080,10 +1114,11 @@ static void export_to_obj(const std::string& path, g3d::HandleBuffer buffer) {
             file_content += "f " + std::to_string(c) + ' ' + std::to_string(b) + ' ' + std::to_string(d) + '\n';
         }
     }
-
-    printf("%s\n", file_content.c_str());
-
     glUnmapNamedBuffer(buffer);
+
+    std::fstream file{path, std::ios::trunc | std::ios::out};
+    file << file_content;
+
 }
 
 static void uniform1f(uint32_t program, const char* name, float value) {

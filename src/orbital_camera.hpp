@@ -8,11 +8,11 @@ namespace g3d {
     struct OrbitalCameraSettings {
         explicit OrbitalCameraSettings() = default;
         explicit OrbitalCameraSettings(float fovydeg) : fovydeg{fovydeg} {}
-        explicit OrbitalCameraSettings(float fovydeg, float near, float far)
-            : fovydeg{fovydeg}, near{near}, far{far} {}
+        explicit OrbitalCameraSettings(float fovydeg, float _near, float _far)
+            : fovydeg{fovydeg}, _near{_near}, _far{_far} {}
 
         float fovydeg{90.0f};
-        float near{0.01f}, far{100.0f};
+        float _near{0.01f}, _far{100.0f};
     };
 
     class OrbitalCamera {

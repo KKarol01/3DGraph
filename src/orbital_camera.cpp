@@ -48,15 +48,15 @@ namespace g3d {
         _projection_matrix = glm::perspectiveFov(glm::radians(settings.fovydeg),
                                                  static_cast<float>(width),
                                                  static_cast<float>(height),
-                                                 settings.near,
-                                                 settings.far);
+                                                 settings._near,
+                                                 settings._far);
     }
 
     void OrbitalCamera::_calculate_projection_matrix(Window *window) {
         _projection_matrix = glm::perspectiveFov(glm::radians(settings.fovydeg),
                                                  static_cast<float>(window->width),
                                                  static_cast<float>(window->height),
-                                                 settings.near,
-                                                 settings.far);
+                                                 settings._near,
+                                                 settings._far);
     }
 } // namespace g3d
