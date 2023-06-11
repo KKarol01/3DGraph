@@ -784,11 +784,19 @@ static void draw_user_variables_table(SelectedTab tab) {
         }
     };
 
-    static const auto EditableSelectable = [](size_t unique_idx, std::string &data, float overrided_height = 0.0f, bool disable_editing = false, bool open_in_modal = false) {
-        static std::map<size_t, std::pair<bool, bool>> data_specific_settings;
+    using should_be_deleted = bool;
+    static const auto EditableSelectable = [](size_t unique_idx, std::string &data, float overrided_height = 0.0f, bool disable_editing = false, bool open_in_modal = false) -> should_be_deleted {
+        struct DataSettings {
+            bool is_editing = false;
+            bool should_focus_on_text_input = false;
+            bool delete_popup = false;
+        };
+        static std::map<size_t, DataSettings> data_specific_settings;
+        static bool is_any_delete_popup_open = false;
         auto &data_setting = data_specific_settings[unique_idx];
-        bool &is_editing = data_setting.first;
-        bool &focus_on_text_input = data_setting.second;
+        bool &is_editing = data_setting.is_editing;
+        bool &focus_on_text_input = data_setting.should_focus_on_text_input;
+
         ImVec2 center = ImGui::GetMainViewport()->GetCenter();
         if (is_editing && open_in_modal) { 
             ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f)); 
@@ -814,10 +822,7 @@ static void draw_user_variables_table(SelectedTab tab) {
                     trimmer << data;
                     std::string data_trimmed;
                     trimmer >> data_trimmed;
-                    if(data_trimmed == "f") {
-                        data = "invalid name";
-                        return;
-                    }
+                    if(data_trimmed == "f") { data = "invalid name"; return false; }
                     is_editing = false; app_state.needs_recompilation = true; 
                 }
             } else {
@@ -826,8 +831,32 @@ static void draw_user_variables_table(SelectedTab tab) {
                     is_editing = true; focus_on_text_input = true;
                     if (open_in_modal) { ImGui::OpenPopup("SelectableEditingModal"); }
                 }
+                if(is_any_delete_popup_open == false && disable_editing == false && ImGui::IsItemHovered() && ImGui::IsMouseClicked(1)) {
+                    ImGui::OpenPopup("delete_item_popup");
+                    data_setting.delete_popup = true;
+                    is_any_delete_popup_open = true;
+                }
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 10));
+                if(data_setting.delete_popup && ImGui::BeginPopupContextWindow("delete_item_popup")) {
+                    
+                    if(ImGui::Button("Delete")) {
+                        ImGui::CloseCurrentPopup();
+                        ImGui::PopStyleVar();
+                        ImGui::EndPopup();
+                        is_any_delete_popup_open = false;
+                        data_setting.delete_popup = false;
+                        return true;
+                    }
+                    ImGui::EndPopup();
+                } else if(data_setting.delete_popup) {
+                    data_setting.delete_popup = false;
+                    is_any_delete_popup_open = false;
+                }
+                ImGui::PopStyleVar();
             }
         }
+
+        return false;
     };
 
     struct ItemState {
@@ -845,10 +874,10 @@ static void draw_user_variables_table(SelectedTab tab) {
         state.mouse_double_clicked  = ImGui::IsMouseDoubleClicked(0);
     };
 
-    
     static const auto draw_function = [&](size_t idx, auto& data, auto &data_vector){
         static int swap_a=-1, swap_b=-1;
         static int draging_idx = -1;
+        static std::string delete_name;
         static std::map<size_t, ItemState> states;
         ItemState &s1 = states[idx*2+0], &s2 = states[idx*2+1];
 
@@ -858,12 +887,12 @@ static void draw_user_variables_table(SelectedTab tab) {
         if      constexpr(std::same_as<std::remove_cvref_t<decltype(data)>, Slider>)    { overrided_height = 3.0f*ImGui::GetTextLineHeightWithSpacing(); }
         else if constexpr(std::same_as<std::remove_cvref_t<decltype(data)>, Constant>)  { overrided_height = 1.1f*ImGui::GetTextLineHeightWithSpacing(); }
         if(data.name == "f" && std::same_as<std::remove_cvref_t<decltype(data)>, Function>) { disable_editing = true; } //F function cannot be renamed by the user.
-        EditableSelectable(idx*2+0, data.name, overrided_height, disable_editing);
+        if(EditableSelectable(idx*2+0, data.name, overrided_height, disable_editing)) { delete_name = data.name; }
         query_previous_item_state(s1);
 
         ImGui::TableSetColumnIndex(1);
         if constexpr(std::same_as<std::remove_cvref_t<decltype(data)>, Function>) {
-            EditableSelectable(idx*2+1, data.value, 0.0f, false, true);
+            if(EditableSelectable(idx*2+1, data.value, 0.0f, false, true)) {delete_name = data.name;}
         } 
         else if constexpr(std::same_as<std::remove_cvref_t<decltype(data)>, Constant>) {
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
@@ -886,7 +915,6 @@ static void draw_user_variables_table(SelectedTab tab) {
         if(draging_idx == -1 && hovering_any && ImGui::IsMouseDragging(0, 0.1)) { draging_idx = static_cast<int>(idx); }
 
         if(swap_a == -1 && (int)idx == draging_idx && just_stopped_hovering_any && ImGui::IsMouseDragging(0, 0.0f)) {
-            std::cout << ImGui::GetMouseDragDelta(0, 0.0f).y << ' ' << draging_idx << '\n';
             int delta = ImGui::GetMouseDragDelta(0, 0.0f).y > 0.0f ? 1 : ImGui::GetMouseDragDelta(0, 0.0f).y < 0.0f ? -1 : 0;
             if(delta == 0) { return; }
             swap_a = idx;
@@ -900,6 +928,15 @@ static void draw_user_variables_table(SelectedTab tab) {
             data_vector.at(swap_a) = data_vector.at(swap_b);
             data_vector.at(swap_b) = temp;
             draging_idx = swap_b; swap_a = swap_b = -1;
+        }
+        if(idx == 0 && delete_name.empty() == false) {
+            int didx = -1;
+            for(int i=0; i<data_vector.size(); ++i) { if(data_vector.at(i).name == delete_name) { didx = i; break; } }
+            if(didx == -1 || data_vector.at(didx).name == "f") { delete_name = ""; }
+            else {
+                data_vector.erase(data_vector.begin() + didx);
+                delete_name = "";
+            }
         }
     };
 
