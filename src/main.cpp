@@ -19,6 +19,9 @@
 #include <orbital_camera.hpp>
 #include <renderer.hpp>
 
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <doctest.h>
+
 struct Function {
     std::string name, value;
 };
@@ -110,158 +113,118 @@ static void load_project(const char *file_name);
 static void export_to_obj(const std::string& file_name, g3d::HandleBuffer buffer);
 static void log_list_add_message(const std::string& msg);
 
-int main() {
-    start_application("3DCalc", 1280, 960);
-
-    g3d::HandleFramebuffer framebuffer_main;
-    g3d::HandleTexture texture_fmain_color;
-    g3d::HandleTexture texture_fmain_depth_stencil;
-
-    g3d::HandleProgram program_compute; g3d::HandleShader shader_compute;
-    g3d::HandleProgram program_plane;   g3d::HandleShader shader_plane_vert;    g3d::HandleShader shader_plane_frag;
-    g3d::HandleProgram program_line;    g3d::HandleShader shader_line_vert;     g3d::HandleShader shader_line_frag;
-    g3d::HandleProgram program_grid;    g3d::HandleShader shader_grid_vert;     g3d::HandleShader shader_grid_frag;
-
-    program_compute = glCreateProgram();
-    g3d::HandleVao vao_plane;
-    g3d::HandleVao vao_line;
-    g3d::HandleBuffer vbo_plane, ebo_plane, vbo_heights_plane;
-    g3d::HandleBuffer vbo_line;
-    glCreateFramebuffers(1, &framebuffer_main);
-    glCreateTextures(GL_TEXTURE_2D, 1, &texture_fmain_color);
-    glCreateTextures(GL_TEXTURE_2D, 1, &texture_fmain_depth_stencil);
-    glTextureStorage2D(texture_fmain_color, 1, GL_RGB8, app_state.window.width, app_state.window.height);
-    glTextureStorage2D(texture_fmain_depth_stencil, 1, GL_DEPTH24_STENCIL8, app_state.window.width, app_state.window.height);
-    glNamedFramebufferTexture(framebuffer_main, GL_COLOR_ATTACHMENT0, texture_fmain_color, 0);
-    glNamedFramebufferTexture(framebuffer_main, GL_DEPTH_STENCIL_ATTACHMENT, texture_fmain_depth_stencil, 0);
-    glNamedFramebufferDrawBuffer(framebuffer_main, GL_COLOR_ATTACHMENT0);
-    assert((glCheckNamedFramebufferStatus(framebuffer_main, GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) && "Main framebuffer initialisation error.");
-    app_state.heights_buffer = &vbo_heights_plane;
-
-    program_plane = glCreateProgram();  shader_plane_vert = glCreateShader(GL_VERTEX_SHADER); shader_plane_frag = glCreateShader(GL_FRAGMENT_SHADER);
-    program_grid  = glCreateProgram();  shader_grid_vert  = glCreateShader(GL_VERTEX_SHADER); shader_grid_frag  = glCreateShader(GL_FRAGMENT_SHADER);
-
-    glCreateVertexArrays(1, &vao_plane);
-    glCreateBuffers(1, &vbo_plane);
-    glCreateBuffers(1, &ebo_plane);
-    glCreateBuffers(1, &vbo_heights_plane);
-    glVertexArrayVertexBuffer(vao_plane, 0, vbo_plane, 0, 8);
-    glVertexArrayElementBuffer(vao_plane, ebo_plane);
-    glEnableVertexArrayAttrib(vao_plane, 0);
-    glVertexArrayAttribBinding(vao_plane, 0, 0);
-    glVertexArrayAttribFormat(vao_plane, 0, 2, GL_FLOAT, GL_FALSE, 0);
-
-    glCreateVertexArrays(1, &vao_line);
-    glCreateBuffers(1, &vbo_line);
-    glVertexArrayVertexBuffer(vao_line, 0, vbo_line, 0, 12);
-    glEnableVertexArrayAttrib(vao_line, 0);
-    glVertexArrayAttribBinding(vao_line, 0, 0);
-    glVertexArrayAttribFormat(vao_line, 0, 3, GL_FLOAT, GL_FALSE, 0);
-
-     {
-        float vbo[] {-1.0,  1.0, 1.0,  1.0, -1.0, -1.0, 1.0, -1.0 };
-        unsigned ebo[]{0, 1, 2, 2, 1, 3};
-        float lineverts[]{ -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,-1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,-1.0, 0.0, 0.0, 1.0 };
-
-        glNamedBufferStorage(vbo_plane, sizeof(vbo), vbo, 0);
-        glNamedBufferStorage(ebo_plane, sizeof(ebo), ebo, 0);
-        glNamedBufferStorage(vbo_line,  sizeof(lineverts), lineverts, 0);
-    }
-
-    g3d::Texture texture_fmain_color_wrapped {
-        .handle = texture_fmain_color,
-        .target = GL_TEXTURE_2D, .format = GL_RGB8,
-        .width = app_state.window.width, .height = app_state.window.height
-    };
-    g3d::Texture texture_fmain_depth_stencil_wrapped {
-        .handle = texture_fmain_depth_stencil,
-        .target = GL_TEXTURE_2D, .format = GL_DEPTH24_STENCIL8,
-        .width = app_state.window.width, .height = app_state.window.height
-    };
-
-
-    // App State Initialisation    
-    app_state.camera = g3d::OrbitalCamera{&app_state.window, g3d::OrbitalCameraSettings{90.0f, 0.01f, 100.0f}};
-    app_state.framebuffer_main = g3d::Framebuffer{
-        .handle = framebuffer_main,
-        .textures = {{GL_COLOR_ATTACHMENT0,          &texture_fmain_color_wrapped},
-                     {GL_DEPTH_STENCIL_ATTACHMENT,   &texture_fmain_depth_stencil_wrapped}
-        }
-    };
-    // Function "f" shall always be present
-    app_state.functions.push_back(Function{"f", "sin(x)"});
-
-    // Rendering States
-    g3d::RenderState plane_render_state{ 
-        .vao = vao_plane, .program = program_plane 
-    };
-    g3d::RenderState grid_render_state{ 
-        .vao = vao_line, .program = program_grid, .line_width = 2.0f
-    };
-
-    auto &window = app_state.window;
+TEST_CASE("Application initialization") {
+    start_application("TEST NAME", 1024, 768);
     
-    create_plane_shader_source_and_compile(program_plane, shader_plane_vert, shader_plane_frag);
-    create_grid_shader_source_and_compile(program_grid, shader_grid_vert, shader_grid_frag);
-    create_compute_shader(program_compute, shader_compute);
-    uint32_t current_buffer_size=0;
-    while(glfwWindowShouldClose(window.pglfw_window) == false) {
-        glfwPollEvents();
-        imgui_newframe();
-        app_state.camera.update();
-
-        if(app_state.needs_recompilation) {
-            app_state.needs_recompilation = false;
-            try {
-                create_compute_shader(program_compute, shader_compute);
-            } catch(const std::exception& err) {
-                log_list_add_message(err.what());
-            }
-        }
-
-        glEnable(GL_DEPTH_TEST);
-        glBindFramebuffer(GL_FRAMEBUFFER, app_state.framebuffer_main.handle);
-        glViewport(0, 0, app_state.framebuffer_main.textures[0].second->width, app_state.framebuffer_main.textures[0].second->height);
-        auto &bc = app_state.color_settings.color_background;
-        glClearColor(bc.r, bc.g, bc.b, bc.a);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-
-        if (app_state.render_settings.is_grid_rendered) {
-            set_rendering_state_opengl(grid_render_state);
-            uniformm4(program_grid, "v", app_state.camera.view_matrix());
-            uniformm4(program_grid, "p", app_state.camera.projection_matrix());
-            uniform1f(program_grid, "bounds", app_state.plane_settings.bounds);
-            uniform3f(program_grid, "user_color", app_state.color_settings.color_grid);
-            glDrawArraysInstanced(GL_LINES, 0, 2, app_state.plane_settings.bounds * 2 + 1);
-            glDrawArraysInstanced(GL_LINES, 4, 2, app_state.plane_settings.bounds * 2 + 1);
-        }
-
-        glUseProgram(program_compute);
-        uniform1f(program_compute, "detail", app_state.plane_settings.detail);
-        uniform1f(program_compute, "bounds", app_state.plane_settings.bounds);
-        uniform1f(program_compute, "TIME", (float)glfwGetTime());
-        for(const auto& s : app_state.sliders) { uniform1f(program_compute, s.name.c_str(), s.value); }
-        recalculate_plane_height_field(program_compute, &vbo_heights_plane, &current_buffer_size); 
-        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-        set_rendering_state_opengl(plane_render_state);
-        uniformm4(program_plane, "v", app_state.camera.view_matrix());
-        uniformm4(program_plane, "p", app_state.camera.projection_matrix());
-        uniform1f(program_plane, "detail", app_state.plane_settings.detail);
-        uniform1f(program_plane, "size", app_state.plane_settings.bounds);
-        uniform3f(program_plane, "user_color", app_state.color_settings.color_plane);
-        glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0, app_state.plane_settings.detail * app_state.plane_settings.detail);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(0, 0, app_state.window.width, app_state.window.height);
-        glClear(GL_COLOR_BUFFER_BIT);
-        draw_gui();
-        
-        imgui_renderframe();
-        glfwSwapBuffers(window.pglfw_window);   
-        window.has_just_resized = false;
+    REQUIRE_MESSAGE(app_state.window.pglfw_window != nullptr, "A window must be created");
+    
+    {
+        int w, h;
+        glfwGetWindowSize(app_state.window.pglfw_window, &w, &h);
+        REQUIRE_EQ(w, 1024);
+        REQUIRE_EQ(h, 768);
     }
-    return 0;
+
+    REQUIRE_MESSAGE((app_state.functions.size()==1&&app_state.functions.at(0).name == "f"),
+    "At start, a function f should be defined");
+
+    for(int i=0; i<4; ++i) {
+        REQUIRE_MESSAGE(app_state.fonts[i].font != nullptr, "All fonts should be loaded");
+    }
 }
+
+TEST_SUITE_BEGIN("Shader construction and evaluation");
+TEST_CASE("Default construction") {
+    uint32_t prog_plane, vert_plane, frag_plane; 
+    uint32_t prog_grid, vert_grid, frag_grid; 
+    uint32_t prog_compute, compute_shader;
+
+    prog_plane      = glCreateProgram();
+    prog_grid       = glCreateProgram();
+    prog_compute    = glCreateProgram();
+    vert_plane      = glCreateShader(GL_VERTEX_SHADER);
+    vert_grid       = glCreateShader(GL_VERTEX_SHADER);
+    frag_plane      = glCreateShader(GL_FRAGMENT_SHADER);
+    frag_grid       = glCreateShader(GL_FRAGMENT_SHADER);
+    compute_shader  = glCreateShader(GL_COMPUTE_SHADER);
+
+    REQUIRE_MESSAGE(prog_plane     != 0, "GL handles shouldn't be zero for default shaders and their programs");
+    REQUIRE_MESSAGE(prog_grid      != 0, "GL handles shouldn't be zero for default shaders and their programs");
+    REQUIRE_MESSAGE(prog_compute   != 0, "GL handles shouldn't be zero for default shaders and their programs");
+    REQUIRE_MESSAGE(vert_plane     != 0, "GL handles shouldn't be zero for default shaders and their programs");
+    REQUIRE_MESSAGE(vert_grid      != 0, "GL handles shouldn't be zero for default shaders and their programs");
+    REQUIRE_MESSAGE(frag_plane     != 0, "GL handles shouldn't be zero for default shaders and their programs");
+    REQUIRE_MESSAGE(frag_grid      != 0, "GL handles shouldn't be zero for default shaders and their programs");
+    REQUIRE_MESSAGE(compute_shader != 0, "GL handles shouldn't be zero for default shaders and their programs");
+
+    {
+        create_plane_shader_source_and_compile(prog_plane, vert_plane, frag_plane);
+        create_grid_shader_source_and_compile (prog_grid, vert_grid, frag_grid);
+        create_compute_shader(prog_compute, compute_shader);
+        int compile_statuses[]{0,0,0,0};
+        glGetShaderiv(frag_plane,   GL_COMPILE_STATUS, &compile_statuses[0]); 
+        glGetShaderiv(frag_grid,    GL_COMPILE_STATUS, &compile_statuses[1]); 
+        glGetShaderiv(vert_plane,   GL_COMPILE_STATUS, &compile_statuses[2]); 
+        glGetShaderiv(vert_grid,    GL_COMPILE_STATUS, &compile_statuses[3]); 
+
+        REQUIRE(compile_statuses[0] == 1);
+        REQUIRE(compile_statuses[1] == 1);
+        REQUIRE(compile_statuses[2] == 1);
+        REQUIRE(compile_statuses[3] == 1);
+
+        int link_statuses[]{0,0,0};
+        glGetProgramiv(prog_plane, GL_LINK_STATUS, &link_statuses[0]);
+        glGetProgramiv(prog_grid, GL_LINK_STATUS, &link_statuses[1]);
+        glGetProgramiv(prog_compute, GL_LINK_STATUS, &link_statuses[2]);
+        REQUIRE(link_statuses[0] == 1);
+        REQUIRE(link_statuses[1] == 1);
+        REQUIRE(link_statuses[2] == 1);
+    }
+}
+
+TEST_CASE("Plane generation") {
+    uint32_t buffer;
+    uint32_t current_size=0;
+    uint32_t prog_compute, compute_shader;
+    prog_compute    = glCreateProgram();
+    compute_shader  = glCreateShader(GL_COMPUTE_SHADER);
+
+    static const auto calc_for_eq = [&](const std::string& feq) {
+        app_state.functions.at(0).value = feq;
+        create_compute_shader(prog_compute, compute_shader);
+        recalculate_plane_height_field(prog_compute, &buffer, &current_size);
+        glFinish();
+        float *heights = (float*)glMapNamedBufferRange(buffer, 0, pow(app_state.plane_settings.detail+1, 2) * 4, GL_MAP_READ_BIT);
+        return heights;
+    };
+
+    { // check if equation is 0.0
+        float *heights = calc_for_eq("0.0");
+        float correct_heights[16];
+        memset(correct_heights, 0, 16*4);
+        for(int i=0; i<16; ++i) {
+            REQUIRE_EQ(correct_heights[i], doctest::Approx(heights[i]).epsilon(1e-10));    
+        }
+        
+        glUnmapNamedBuffer(buffer);
+    }
+    { // check if equation is sin(x) in <-1, 1>
+        float *heights = calc_for_eq("sin(x)");
+        for(int i=0; i<16; ++i) {
+            float x = (float)(i % 4);
+            float z = (float)(i / 4);
+            float h = heights[(uint32_t)z*4 + (uint32_t)x];
+            x = (x/3.0f) * 2.0f - 1.0f;
+            z = (z/3.0f) * 2.0f - 1.0f;
+        
+            REQUIRE_EQ(sinf(x), doctest::Approx(h).epsilon(1e-6));    
+        }
+        
+        glUnmapNamedBuffer(buffer);
+    }
+
+}
+TEST_SUITE_END();
 
 static void start_application(const char* window_title, uint32_t window_width, uint32_t window_height) {
     // initialise opengl and create window
@@ -273,12 +236,12 @@ static void start_application(const char* window_title, uint32_t window_width, u
 
     app_state.window = g3d::Window{window_title, window_width, window_height};
     app_state.window.pglfw_window = glfwCreateWindow(app_state.window.width, app_state.window.height, app_state.window.title, 0, 0);
-    assert(app_state.window.pglfw_window && "Could not create the window");
+    if (app_state.window.pglfw_window == nullptr) { throw std::runtime_error{"Could not create the window"}; };
 
     glfwMakeContextCurrent(app_state.window.pglfw_window);
     
     auto glad_init_result = gladLoadGLLoader((GLADloadproc)glfwGetProcAddress);
-    assert(glad_init_result && "Could not initialize OpenGL");
+    if (glad_init_result == 0) { throw std::runtime_error{"Could not initialize OpenGL"}; } 
 
     // initialise ImGui 
     IMGUI_CHECKVERSION();
@@ -294,6 +257,8 @@ static void start_application(const char* window_title, uint32_t window_width, u
     app_state.fonts[3].font = io.Fonts->AddFontFromFileTTF("fonts/consola.ttf", 25);
 
     glfwSetFramebufferSizeCallback(app_state.window.pglfw_window, on_window_resize);
+
+    app_state.functions.emplace_back("f", "sin(x)");
 }
 
 static void terminate_application() {
@@ -518,9 +483,12 @@ static void recalculate_plane_height_field(g3d::HandleProgram program, g3d::Hand
     }
 
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, *height_buffer);
-    //glUseProgram(program);
+    glUseProgram(program);
     const float compute_num = (float)(app_state.plane_settings.detail+1) / 32.0f;
     const uint32_t compute_num_uint = glm::ceil(compute_num);
+    uniform1f(program, "detail", app_state.plane_settings.detail);
+    uniform1f(program, "bounds", app_state.plane_settings.bounds);
+    uniform1f(program, "TIME", (float)glfwGetTime());
     glDispatchCompute(compute_num_uint, compute_num_uint, 1);
 }
 
