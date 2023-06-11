@@ -71,6 +71,19 @@ struct AppState {
         bool is_grid_rendered               = true;
         bool is_plane_grid_rendered         = true;
     } render_settings;
+
+    void reset() {
+        functions.clear();
+        functions.emplace_back("f", "sin(x)");
+        sliders.clear();
+        constants.clear();
+        logs.clear();
+        font_idx = 2;
+        plane_settings = PlaneSettings{};
+        color_settings = ColorSettings{};
+        render_settings = RenderSettings{};
+        needs_recompilation = true;
+    }
 } app_state;
 
 static void start_application(const char* window_title, uint32_t window_width, uint32_t window_height);
@@ -541,6 +554,9 @@ static void draw_menu_bar() {
         if(ImGui::BeginMenu("Project...")) {
             static std::string file_name;
             static bool no_name_error = false;
+            if (ImGui::Button("New project")) {
+                app_state.reset();
+            }
             if (ImGui::Button("Open project")) {
                 nfdchar_t *outPath = NULL;
                 nfdresult_t result = NFD_OpenDialog("3dg", std::filesystem::current_path().string().c_str(), &outPath);
