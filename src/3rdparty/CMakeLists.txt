@@ -1,4 +1,4 @@
-target_sources(opengl_engine PRIVATE 
+target_sources(3dcalculator PRIVATE 
 "3rdparty/include/imgui/imgui.cpp"
 "3rdparty/include/imgui/imgui_draw.cpp"
 "3rdparty/include/imgui/imgui_tables.cpp"

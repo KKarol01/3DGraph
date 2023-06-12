@@ -1,0 +1,12 @@
+[doctest] doctest version is "2.4.11"
+[doctest] run with "--help" for options
+===============================================================================
+C:/Users/k/Desktop/_3d/src/main.cpp(116):
+TEST CASE:  Application initialization
+
+C:/Users/k/Desktop/_3d/src/main.cpp(116): FATAL ERROR: test case CRASHED: SIGABRT - Abort (abnormal termination) signal
+
+===============================================================================
+[doctest] test cases: 1 | 0 passed | 1 failed | 5 skipped
+[doctest] assertions: 0 | 0 passed | 0 failed |
+[doctest] Status: FAILURE!

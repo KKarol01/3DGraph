@@ -1,4 +1,4 @@
-add_executable(opengl_engine "main.cpp"
+add_executable(3dcalculator "main.cpp"
 "3rdparty/glad.c"
 "3rdparty/include/imgui/imgui.cpp"
 "3rdparty/include/imgui/imgui_draw.cpp"
@@ -11,14 +11,14 @@ add_executable(opengl_engine "main.cpp"
 "renderer.cpp"
 )
 
-set_property(TARGET opengl_engine PROPERTY CXX_STANDARD 20)
+set_property(TARGET 3dcalculator PROPERTY CXX_STANDARD 20)
 
-target_link_directories(opengl_engine PRIVATE "3rdparty/lib")
-target_include_directories(opengl_engine PRIVATE "3rdparty/include" ".")
-target_link_libraries(opengl_engine PRIVATE "glfw3" "nfd")
+target_link_directories(3dcalculator PRIVATE "3rdparty/lib")
+target_include_directories(3dcalculator PRIVATE "3rdparty/include" ".")
+target_link_libraries(3dcalculator PRIVATE "glfw3" "nfd")
 
 file(COPY "fonts" DESTINATION ".")
 
-#target_compile_definitions(opengl_engine PRIVATE )
+#target_compile_definitions(3dcalculator PRIVATE )
 add_subdirectory("3rdparty")
 #add_subdirectory("assets")
