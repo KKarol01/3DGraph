@@ -222,6 +222,100 @@ TEST_CASE("Plane generation") {
         
         glUnmapNamedBuffer(buffer);
     }
+    { // check if equation is sin(x+CONST)+SLIDER in <-3, 3>
+        app_state.sliders.push_back(Slider{"s", 2.0f});
+        app_state.constants.push_back(Constant{.name="c", .value=3.14f});
+        app_state.plane_settings.bounds = 3;
+        app_state.plane_settings.detail = 4;
+        float *heights = calc_for_eq("sin(x+c)+s");
+
+        for(int i=0; i<25; ++i) {
+            float x = (float)(i % 5);
+            float z = (float)(i / 5);
+            float h = heights[(uint32_t)z*5 + (uint32_t)x];
+            x = (x/4.0f) * 2.0f*3.0f - 3.0f;
+            z = (z/4.0f) * 2.0f*3.0f - 3.0f;
+        
+            REQUIRE_EQ(sinf(x+3.14f)+2.0f, doctest::Approx(h).epsilon(1e-6));    
+        }
+        
+        glUnmapNamedBuffer(buffer);
+    }
+}
+TEST_SUITE_END();
+
+TEST_SUITE_BEGIN("Project saving, loading, creating and exporting");
+TEST_CASE("Project save") {
+    app_state.functions.clear();
+    app_state.sliders.clear();
+    app_state.constants.clear();
+    
+    app_state.plane_settings.detail = 5;
+    app_state.plane_settings.bounds = 2;
+    app_state.functions.push_back(Function{.name="f", .value="cos(x)"});
+    app_state.sliders.push_back(Slider{"s1", 2.0f});
+    app_state.sliders.push_back(Slider{"s2", 3.0f});
+    app_state.sliders.back().min = -2.0f;
+    app_state.constants.push_back(Constant{.name="c1", .value=3.14f});
+    
+    save_project("test_file.3dg");
+    std::fstream pfile{"test_file.3dg", std::ios::in};
+    REQUIRE(pfile.is_open());
+    std::stringstream ss;
+    ss << pfile.rdbuf();
+    std::string file_string = ss.str();
+    std::string correct_string = R"file([Functions]
+f cos(x)
+[Constants]
+c1 3.14
+[Sliders]
+s1 2 0 1
+s2 3 -2 1
+[Color Settings]
+0.129412 0.137255 0.14902 1
+0.368627 0.368627 0.368627 1
+0.529412 0.529412 0.529412 1
+0.894118 0.623529 0.239216 1
+[Plane Settings]
+2 5 1 0.98 1
+[Render Settings]
+1 1
+[Editor Settings]
+2)file";
+REQUIRE_EQ(file_string, correct_string);
+}
+
+TEST_CASE("Project load") {
+    app_state.reset();
+    REQUIRE(app_state.functions.size()==1);
+    REQUIRE(app_state.sliders.size()==0);
+    REQUIRE(app_state.constants.size()==0);
+    REQUIRE(app_state.plane_settings.detail == 3);
+    REQUIRE(app_state.plane_settings.bounds == 1);
+
+    load_project("test_file.3dg");
+    REQUIRE(app_state.functions.size()==1);
+    REQUIRE(app_state.sliders.size()==2);
+    REQUIRE(app_state.constants.size()==1);
+
+    const auto& f1 = app_state.functions.at(0);
+    const auto& s1 = app_state.sliders.at(0);
+    const auto& s2 = app_state.sliders.at(1);
+    const auto& c1 = app_state.constants.at(0);
+    REQUIRE(f1.name  =="f");
+    REQUIRE(f1.value =="cos(x)");
+    REQUIRE(s1.name  =="s1");
+    REQUIRE(s1.value == 2.0f);
+    REQUIRE(s2.name  =="s2");
+    REQUIRE(s2.value ==3.0f);
+    REQUIRE(s2.min   ==-2.0f);
+    REQUIRE(c1.name  == "c1");
+    REQUIRE(c1.value == 3.14f);
+    REQUIRE(app_state.plane_settings.bounds == 2);
+    REQUIRE(app_state.plane_settings.detail == 5);
+}
+
+TEST_CASE("Project export") {
 
 }
 TEST_SUITE_END();
@@ -489,6 +583,7 @@ static void recalculate_plane_height_field(g3d::HandleProgram program, g3d::Hand
     uniform1f(program, "detail", app_state.plane_settings.detail);
     uniform1f(program, "bounds", app_state.plane_settings.bounds);
     uniform1f(program, "TIME", (float)glfwGetTime());
+    for(const auto&s:app_state.sliders) { uniform1f(program, s.name.c_str(), s.value); }
     glDispatchCompute(compute_num_uint, compute_num_uint, 1);
 }
 
