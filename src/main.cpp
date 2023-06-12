@@ -265,6 +265,7 @@ int main() {
 
 static void start_application(const char* window_title, uint32_t window_width, uint32_t window_height) {
     // initialise opengl and create window
+    FreeConsole(); // hide cmd console
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
