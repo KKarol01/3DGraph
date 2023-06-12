@@ -8,3 +8,5 @@
 ### How to build
 Clone this repository on your machine and run one of the two provided PowerShell scripts from **the main directory**.
 The output files, along with the executable, should be in *"<MainDir/out/src>"*.
+
+**Alternatively**, you can download [built project](https://github.com/ThinCan/3dgraph/raw/built_binaries/3DCalculator_Built.zip)
