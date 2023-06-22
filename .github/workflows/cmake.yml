@@ -30,10 +30,11 @@ jobs:
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
     - name: Create Release  
       uses: actions/create-release@v1
+      id: create_release
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        id: create_release
+
         tag_name: ${{github.ref}}
         release_name: Release ${{github.ref}}
         draft: false
