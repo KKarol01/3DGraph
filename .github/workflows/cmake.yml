@@ -24,15 +24,27 @@ jobs:
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
       run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-
+      
     - name: Build
       # Build your program with the given configuration
       run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
-      
+    - name: Create Release  
     - uses: actions/create-release@v1
       with:
+        id: create_release
         tag_name: ${{github.ref}}
         release_name: Release ${{github.ref}}
         draft: false
-        prerelase: false
+        prerelease: false
+      
+    - name: Zip build files
+      run: tar -cvf release.zip ${{github.workspace}}/build  
+      
+    - name: Upload files
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{steps.create_release.outputs.upload_url}}
+        asset_path: ./release.zip
+        asset_name: release.zip
+        asset_content_type: application/zip
 
