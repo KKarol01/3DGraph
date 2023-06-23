@@ -24,8 +24,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          release_name: Release ${{ github.ref }}
-          tag_name: ${{ github.ref }}
+          release_name: ${{ github.ref_name.replace('refs/tags/', '') }}
+          tag_name: ${{ github.ref_name.replace('refs/tags/', '') }}
           draft: false
           prerelease: false
 
