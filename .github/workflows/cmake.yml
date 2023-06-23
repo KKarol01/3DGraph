@@ -19,7 +19,7 @@ jobs:
         run: cmake --build build --config Release
 
       - name: Zip build directory
-        run: tar -vcf build.zip ${{ github.workspace }}/build/
+        run: tar -vcf ${{ github.workspace }}/build.zip ${{ github.workspace }}/build/
         
       - name: Create Release
         id: create_release
