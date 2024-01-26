@@ -1,4 +1,5 @@
 # 3D Graph Calculator
+It's an application made for university project. It's written in C++ and OpenGL, and allows one to write one line functions in GLSL, that get applied to the mesh plane. You also get access to special variables like `time`. It's basically a dumbed down version of online tool "ShaderToy". You can save your projects, load them later, and export your result to the .obj file.
 ## How to install
 ### Requirements
 - A Windows system
