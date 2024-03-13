@@ -34,3 +34,9 @@ Clone this repository on your machine and run one of the two provided PowerShell
 The output files, along with the executable, should be in *"<MainDir/out/src>"*.
 
 **Alternatively**, you can download built project [3dcalculator.zip](https://github.com/ThinCan/3dgraph/raw/built_binaries/3dcalculator.zip).
+
+# Used libraries
+- [glfw](https://github.com/glfw/glfw#head1234)
+- [glm](https://github.com/g-truc/glm)
+- [dear imgui](https://github.com/ocornut/imgui)
+- [glad](https://glad.dav1d.de/)
